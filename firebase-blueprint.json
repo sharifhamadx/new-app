@@ -1,0 +1,208 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated user account profile, search quota, and subscription state synced across all devices.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 200
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "photoURL": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "searchesRemaining": {
+          "type": "integer"
+        },
+        "isPremium": {
+          "type": "boolean"
+        },
+        "subscriptionPlan": {
+          "type": "string",
+          "enum": ["free", "weekly_pass", "monthly", "annual"]
+        },
+        "termsAccepted": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "email",
+        "displayName",
+        "photoURL",
+        "searchesRemaining",
+        "isPremium",
+        "subscriptionPlan",
+        "termsAccepted",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SearchHistoryItem": {
+      "title": "SearchHistoryItem",
+      "description": "Saved search query and summary generated for a user.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "prompt": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "region": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "mood": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "dietary": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "language": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "prompt",
+        "region",
+        "mood",
+        "dietary",
+        "language",
+        "summary",
+        "createdAt"
+      ]
+    },
+    "ContactMessage": {
+      "title": "ContactMessage",
+      "description": "Direct inquiry submitted to the developer.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 200
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "name", "email", "message", "createdAt"]
+    },
+    "PartnerInquiry": {
+      "title": "PartnerInquiry",
+      "description": "B2B sponsored listing inquiry from a Greek hotel, taverna, or tour operator.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "businessName": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "businessType": {
+          "type": "string",
+          "enum": ["taverna", "hotel", "tour"]
+        },
+        "city": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "contactEmail": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 200
+        },
+        "websiteUrl": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 1500
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "businessName", "businessType", "city", "contactEmail", "websiteUrl", "notes", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profile and quota state keyed by Firebase Auth UID."
+    },
+    "/users/{userId}/searches/{searchId}": {
+      "schema": { "$ref": "#/entities/SearchHistoryItem" },
+      "description": "User's saved search history across all devices."
+    },
+    "/contactMessages/{messageId}": {
+      "schema": { "$ref": "#/entities/ContactMessage" },
+      "description": "Contact messages sent to developer Sharif Hamad."
+    },
+    "/partnerInquiries/{inquiryId}": {
+      "schema": { "$ref": "#/entities/PartnerInquiry" },
+      "description": "Sponsored hotel/taverna listing inquiries sent to Sharif Hamad."
+    }
+  }
+}
