@@ -16,6 +16,28 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const port = parseInt(process.env.PORT || '3000', 10);
 
+// Allow native Capacitor APK (https://localhost / capacitor://localhost) and Cloud Run origins to call /api/*
+app.use('/api', (req: Request, res: Response, next: NextFunction) => {
+  const origin = req.headers.origin;
+  if (
+    origin &&
+    (origin === 'https://localhost' ||
+      origin === 'http://localhost' ||
+      origin === 'capacitor://localhost' ||
+      origin.startsWith('http://localhost:') ||
+      /^https:\/\/[a-z0-9-]+\.[a-z0-9-]+\.run\.app$/i.test(origin))
+  ) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept');
+  }
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  return next();
+});
+
 app.use(express.json());
 
 // Load Firebase config to verify Firebase ID tokens against Google Identity Toolkit

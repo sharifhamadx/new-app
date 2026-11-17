@@ -27,6 +27,7 @@ import {
 } from '../hooks/useTranslatedContent';
 import { IMG_HERO_AEGEAN } from '../data/greekCuratedData';
 import { generateExecutivePdf } from '../utils/generateExecutivePdf';
+import { apiUrl } from '../utils/apiBase';
 import {
   MapPin,
   Search,
@@ -357,7 +358,7 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
       });
 
       const callRecommendApi = async () => {
-        const res = await fetch('/api/recommend', {
+        const res = await fetch(apiUrl('/api/recommend'), {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -499,7 +500,7 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
       });
 
       const callItineraryApi = async () => {
-        const res = await fetch('/api/itinerary', {
+        const res = await fetch(apiUrl('/api/itinerary'), {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

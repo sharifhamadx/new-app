@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { translations } from '../translations';
 import { Language } from '../types';
+import { apiUrl } from '../utils/apiBase';
 
 export interface LanguageOption {
   code: string;
@@ -100,7 +101,7 @@ export async function translatePayloadDetailed<T>(
   }
 
   const doFetch = async () => {
-    const res = await fetch('/api/translate', {
+    const res = await fetch(apiUrl('/api/translate'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

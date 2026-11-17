@@ -12,6 +12,7 @@ import {
 import { auth, db, handleFirestoreError, OperationType } from '../firebase';
 import { Language, User } from '../types';
 import { useUiTranslation } from '../hooks/useTranslatedContent';
+import { apiUrl } from '../utils/apiBase';
 import {
   GraduationCap,
   Flag,
@@ -134,7 +135,7 @@ export const AboutDeveloperView: React.FC<AboutDeveloperViewProps> = ({
         handleFirestoreError(err, OperationType.CREATE, msgPath);
       }
 
-      await fetch('/api/contact', {
+      await fetch(apiUrl('/api/contact'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: name.trim(), email: email.trim(), message: message.trim() }),
@@ -177,7 +178,7 @@ export const AboutDeveloperView: React.FC<AboutDeveloperViewProps> = ({
         handleFirestoreError(err, OperationType.CREATE, inquiryPath);
       }
 
-      await fetch('/api/partner-inquiry', {
+      await fetch(apiUrl('/api/partner-inquiry'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

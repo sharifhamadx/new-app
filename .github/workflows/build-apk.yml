@@ -1,0 +1,81 @@
+name: Build Android APK (AEGEA)
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: 'Hosted Backend URL for API calls inside the APK'
+        required: false
+        default: 'https://ais-pre-vbei53jcf2iskwspzf3lnz-288600478609.europe-west2.run.app'
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    name: Build AEGEA Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install project dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Build production web assets
+        env:
+          VITE_API_BASE_URL: ${{ github.event.inputs.api_base_url || vars.VITE_API_BASE_URL || 'https://ais-pre-vbei53jcf2iskwspzf3lnz-288600478609.europe-west2.run.app' }}
+        run: npm run build
+
+      - name: Generate and configure Capacitor Android project
+        run: |
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+          node scripts/configure-android.mjs
+          npx cap sync android
+
+      - name: Build installable Android APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Rename output APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk AEGEA-Smart-Guide.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AEGEA-Smart-Guide-APK
+          path: AEGEA-Smart-Guide.apk
+          retention-days: 30
+
+      - name: Publish downloadable GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-v1.${{ github.run_number }}
+          name: AEGEA Smart Guide APK v1.${{ github.run_number }}
+          body: |
+            Automated Android APK build for **AEGEA — Your Smart Guide**.
+            Download `AEGEA-Smart-Guide.apk` below directly on your Android phone and tap to install.
+          files: AEGEA-Smart-Guide.apk
