@@ -1472,10 +1472,97 @@ async function startServer() {
   const isProd = process.env.NODE_ENV === 'production';
 
   if (!isProd) {
+    process.env.DISABLE_HMR = 'true';
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, hmr: false, ws: false },
       appType: 'spa',
     });
+
+    // Vite 8 still calls transport.connect(...) inside /@vite/client even with hmr: false / ws: false.
+    // Disable that WebSocket connection in dev preview so the iframe never logs WebSocket closed errors.
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      if (req.method !== 'GET' || (req.path !== '/@vite/client' && !req.url.startsWith('/@vite/client?'))) {
+        return next();
+      }
+
+      delete req.headers['accept-encoding'];
+      delete req.headers['if-none-match'];
+
+      const chunks: Buffer[] = [];
+      let deferredStatus: number | undefined;
+      let deferredMessage: string | undefined;
+      let deferredHeaders: Record<string, any> | undefined;
+
+      const origWriteHead = res.writeHead.bind(res);
+      const origWrite = res.write.bind(res);
+      const origEnd = res.end.bind(res);
+
+      (res as any).writeHead = (statusCode: number, reasonOrHeaders?: any, maybeHeaders?: any) => {
+        deferredStatus = statusCode;
+        if (typeof reasonOrHeaders === 'string') {
+          deferredMessage = reasonOrHeaders;
+          deferredHeaders = maybeHeaders;
+        } else if (reasonOrHeaders && typeof reasonOrHeaders === 'object') {
+          deferredHeaders = reasonOrHeaders;
+        }
+        return res;
+      };
+
+      (res as any).write = (chunk: any, encoding?: any) => {
+        if (chunk !== undefined && chunk !== null) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), typeof encoding === 'string' ? (encoding as BufferEncoding) : 'utf8'));
+        }
+        return true;
+      };
+
+      (res as any).end = (chunk?: any, encoding?: any, cb?: any) => {
+        if (typeof chunk === 'function') {
+          cb = chunk;
+          chunk = undefined;
+        } else if (typeof encoding === 'function') {
+          cb = encoding;
+          encoding = undefined;
+        }
+        if (chunk !== undefined && chunk !== null) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), typeof encoding === 'string' ? (encoding as BufferEncoding) : 'utf8'));
+        }
+
+        const rawCode = Buffer.concat(chunks).toString('utf8');
+        const patchedCode = rawCode.replace(
+          'transport.connect(createHMRHandler(handleMessage));',
+          '/* HMR WebSocket disabled */'
+        );
+
+        res.writeHead = origWriteHead;
+        res.write = origWrite;
+        res.end = origEnd;
+
+        if (deferredHeaders) {
+          for (const [k, v] of Object.entries(deferredHeaders)) {
+            if (k.toLowerCase() !== 'content-length' && k.toLowerCase() !== 'etag') {
+              res.setHeader(k, v as any);
+            }
+          }
+        }
+        res.removeHeader('content-length');
+        res.removeHeader('etag');
+        res.setHeader('Cache-Control', 'no-store');
+        res.setHeader('Content-Length', Buffer.byteLength(patchedCode, 'utf8'));
+
+        if (deferredStatus !== undefined) {
+          if (deferredMessage) {
+            origWriteHead(deferredStatus, deferredMessage);
+          } else {
+            origWriteHead(deferredStatus);
+          }
+        }
+
+        return origEnd(patchedCode, 'utf8', cb);
+      };
+
+      return vite.middlewares(req, res, next);
+    });
+
     app.use(vite.middlewares);
   } else {
     app.use(express.static(path.join(__dirname, 'dist')));

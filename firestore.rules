@@ -34,8 +34,7 @@ service cloud.firestore {
     function isAdmin() {
       return isVerified() && (
         request.auth.token.email == 'sharifhamadx122@gmail.com' ||
-        request.auth.token.email == 'sharifhamadmoko@gmail.com' ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        request.auth.token.email == 'sharifhamadmoko@gmail.com'
       );
     }
 

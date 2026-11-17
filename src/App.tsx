@@ -9,6 +9,7 @@ import {
   deleteDoc,
   serverTimestamp,
   query,
+  where,
   limit,
 } from 'firebase/firestore';
 import { auth, db, isAdminEmail, handleFirestoreError, OperationType } from './firebase';
@@ -182,7 +183,7 @@ export default function App() {
       // Sync user's Saved Trip Favorites from Firestore + persist offline
       const favsPath = `users/${fbUser.uid}/favorites`;
       unsubFavorites = onSnapshot(
-        query(collection(db, favsPath), limit(100)),
+        query(collection(db, favsPath), where('userId', '==', fbUser.uid), limit(100)),
         (snap) => {
           const list = snap.docs
             .map((d) => ({ ...(d.data() as FavoriteItem), id: d.id }))
