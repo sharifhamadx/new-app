@@ -158,4 +158,21 @@ export interface SearchHistoryRecord {
   createdAt: any;
 }
 
-export type ActiveTab = 'matchmaker' | 'explore' | 'dishes' | 'hidden-gems' | 'about' | 'terms';
+export type FavoriteItemType = 'taverna' | 'hotel' | 'site' | 'dish' | 'gem';
+
+export interface FavoriteItem {
+  id: string;
+  userId: string;
+  itemType: FavoriteItemType;
+  name: string;
+  englishName: string;
+  greekName: string;
+  region: string;
+  description: string;
+  officialWebsite: string;
+  imageUrl: string;
+  priceLevel: string;
+  createdAt?: any;
+}
+
+export type ActiveTab = 'matchmaker' | 'explore' | 'dishes' | 'hidden-gems' | 'favorites' | 'about' | 'terms';

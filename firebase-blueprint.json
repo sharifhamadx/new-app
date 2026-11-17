@@ -185,6 +185,64 @@
         }
       },
       "required": ["id", "businessName", "businessType", "city", "contactEmail", "websiteUrl", "notes", "createdAt"]
+    },
+    "FavoriteItem": {
+      "title": "FavoriteItem",
+      "description": "Saved taverna, hotel, archaeological site, dish, or hidden gem bookmarked by a signed-in traveler.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "itemType": {
+          "type": "string",
+          "enum": ["taverna", "hotel", "site", "dish", "gem"]
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "englishName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "greekName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "region": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1500
+        },
+        "officialWebsite": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "imageUrl": {
+          "type": "string",
+          "maxLength": 600
+        },
+        "priceLevel": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "userId", "itemType", "name", "englishName", "greekName", "region", "description", "officialWebsite", "imageUrl", "priceLevel", "createdAt"]
     }
   },
   "firestore": {
@@ -195,6 +253,10 @@
     "/users/{userId}/searches/{searchId}": {
       "schema": { "$ref": "#/entities/SearchHistoryItem" },
       "description": "User's saved search history across all devices."
+    },
+    "/users/{userId}/favorites/{favId}": {
+      "schema": { "$ref": "#/entities/FavoriteItem" },
+      "description": "User's bookmarked favorite Greek places synced across devices."
     },
     "/contactMessages/{messageId}": {
       "schema": { "$ref": "#/entities/ContactMessage" },

@@ -17,6 +17,8 @@ import {
   SearchHistoryRecord,
   GuideCategory,
   TripItinerary,
+  FavoriteItem,
+  FavoriteItemType,
 } from '../types';
 import {
   useUiTranslation,
@@ -49,6 +51,7 @@ import {
   Ticket,
   Sparkles,
   Languages,
+  Heart,
 } from 'lucide-react';
 
 interface MatchmakerViewProps {
@@ -58,6 +61,8 @@ interface MatchmakerViewProps {
   onOpenPremium: () => void;
   onOpenPartner?: () => void;
   onDecrementSearch: () => Promise<void>;
+  favorites?: FavoriteItem[];
+  onToggleFavorite?: (item: Omit<FavoriteItem, 'id' | 'userId' | 'createdAt'>) => Promise<void>;
 }
 
 const HERO_IMAGE = IMG_HERO_AEGEAN;
@@ -122,6 +127,8 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
   onOpenPremium,
   onOpenPartner,
   onDecrementSearch,
+  favorites = [],
+  onToggleFavorite,
 }) => {
   const [city, setCity] = useState('Athens');
   const [foodType, setFoodType] = useState('traditional');
@@ -147,6 +154,28 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
 
   const { t } = useUiTranslation(currentLang);
   const todayFormatted = formatLiveDate(currentLang);
+
+  // Hydrate last cached guide automatically when opening offline (PWA offline support)
+  useEffect(() => {
+    if (typeof window === 'undefined' || result) return;
+    if (navigator.onLine) return;
+    try {
+      const raw = localStorage.getItem('aegea_offline_last_guide_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed?.result) {
+          if (parsed.city && typeof parsed.city === 'string') {
+            setCity(parsed.city);
+          }
+          const normLang = String(currentLang || 'en').trim().toLowerCase();
+          resultCacheRef.current = { [normLang]: parsed.result };
+          setResult(parsed.result);
+        }
+      }
+    } catch {
+      // ignore offline cache read error
+    }
+  }, []);
 
   // Load user's real search history from Firestore across all devices
   useEffect(() => {
@@ -392,6 +421,15 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
       resultCacheRef.current = { [normLang]: finalResult };
       setResult(finalResult);
 
+      try {
+        localStorage.setItem(
+          'aegea_offline_last_guide_v1',
+          JSON.stringify({ city: selectedCityObj.value, result: finalResult })
+        );
+      } catch {
+        // ignore storage quota errors
+      }
+
       // Decrement trial search count in Firestore
       if (!user.isPremium && !user.isAdmin) {
         await onDecrementSearch();
@@ -601,6 +639,39 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
     </div>
   );
 
+  const isFavorited = (itemType: FavoriteItemType, englishOrName: string, displayName: string): boolean => {
+    const safeId = `${itemType}_${englishOrName}`
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 96);
+    return favorites.some(
+      (f) =>
+        (safeId && f.id === safeId) ||
+        (f.itemType === itemType && (f.englishName === englishOrName || f.name === displayName))
+    );
+  };
+
+  const renderFavoriteButton = (payload: Omit<FavoriteItem, 'id' | 'userId' | 'createdAt'>) => {
+    const saved = isFavorited(payload.itemType, payload.englishName, payload.name);
+    return (
+      <button
+        type="button"
+        onClick={() => onToggleFavorite?.(payload)}
+        title={saved ? t.favorites?.savedBadge || 'Saved' : t.favorites?.saveBtn || 'Save to Trip'}
+        aria-label={saved ? t.favorites?.savedBadge || 'Saved' : t.favorites?.saveBtn || 'Save to Trip'}
+        className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer print:hidden shrink-0 ${
+          saved
+            ? 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800 text-rose-600 dark:text-rose-400'
+            : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-rose-300 hover:text-rose-600 dark:hover:text-rose-400'
+        }`}
+      >
+        <Heart className={`w-3.5 h-3.5 shrink-0 ${saved ? 'fill-rose-500 text-rose-500' : ''}`} />
+        <span>{saved ? t.favorites?.savedBadge || 'Saved' : t.favorites?.saveBtn || 'Save'}</span>
+      </button>
+    );
+  };
+
   // Section renderers ordered by rank (#1 best downward)
   const renderTavernasSection = () =>
     result && result.tavernas && result.tavernas.length > 0 ? (
@@ -642,10 +713,23 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
                         <span aria-hidden="true">·</span>
                         <span className="truncate">{tavern.region}</span>
                       </div>
-                      <span className="flex items-center gap-1 font-semibold text-amber-600 dark:text-amber-400 tabular-nums shrink-0">
-                        <Star className="w-3.5 h-3.5 fill-amber-500 text-amber-500" />
-                        {tavern.rating}
-                      </span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="flex items-center gap-1 font-semibold text-amber-600 dark:text-amber-400 tabular-nums">
+                          <Star className="w-3.5 h-3.5 fill-amber-500 text-amber-500" />
+                          {tavern.rating}
+                        </span>
+                        {renderFavoriteButton({
+                          itemType: 'taverna',
+                          name: tavern.name,
+                          englishName: tavern.englishName || tavern.name,
+                          greekName: tavern.greekName || '',
+                          region: tavern.region || tavern.location || '',
+                          description: tavern.description || '',
+                          officialWebsite: website || '',
+                          imageUrl: hasImg ? tavern.imageUrl || '' : '',
+                          priceLevel: tavern.priceLevel || '€€',
+                        })}
+                      </div>
                     </div>
 
                     <div>
@@ -773,10 +857,23 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
                           {hotel.category} · {hotel.region}
                         </span>
                       </div>
-                      <span className="flex items-center gap-1 font-semibold text-amber-600 dark:text-amber-400 tabular-nums shrink-0">
-                        <Star className="w-3.5 h-3.5 fill-amber-500 text-amber-500" />
-                        {hotel.rating}
-                      </span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="flex items-center gap-1 font-semibold text-amber-600 dark:text-amber-400 tabular-nums">
+                          <Star className="w-3.5 h-3.5 fill-amber-500 text-amber-500" />
+                          {hotel.rating}
+                        </span>
+                        {renderFavoriteButton({
+                          itemType: 'hotel',
+                          name: hotel.name,
+                          englishName: hotel.englishName || hotel.name,
+                          greekName: hotel.greekName || '',
+                          region: hotel.region || hotel.location || '',
+                          description: hotel.description || '',
+                          officialWebsite: website || '',
+                          imageUrl: hasImg ? hotel.imageUrl || '' : '',
+                          priceLevel: hotel.priceLevel || '€€',
+                        })}
+                      </div>
                     </div>
 
                     <div>
@@ -903,9 +1000,22 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
                         <span aria-hidden="true">·</span>
                         <span className="truncate">{site.region}</span>
                       </div>
-                      <span className="font-semibold text-amber-700 dark:text-amber-400 truncate max-w-[170px] shrink-0">
-                        {site.era}
-                      </span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="font-semibold text-amber-700 dark:text-amber-400 truncate max-w-[140px]">
+                          {site.era}
+                        </span>
+                        {renderFavoriteButton({
+                          itemType: 'site',
+                          name: site.name,
+                          englishName: site.englishName || site.name,
+                          greekName: site.greekName || '',
+                          region: site.region || site.location || '',
+                          description: site.description || '',
+                          officialWebsite: website || '',
+                          imageUrl: hasImg ? site.imageUrl || '' : '',
+                          priceLevel: '',
+                        })}
+                      </div>
                     </div>
 
                     <div>
@@ -1399,14 +1509,27 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
                             <h3 className="font-bold text-base text-slate-900 dark:text-white leading-snug">
                               {dish.name}
                             </h3>
-                            <button
-                              type="button"
-                              onClick={() => handleSpeakPhrase(dish.greekName)}
-                              className="p-1.5 text-sky-700 dark:text-sky-400 hover:bg-sky-50 dark:hover:bg-slate-800 rounded-lg transition-colors shrink-0 cursor-pointer print:hidden"
-                              title={t.matchmaker.pronounceLabel}
-                            >
-                              <Volume2 className="w-4 h-4" />
-                            </button>
+                            <div className="flex items-center gap-1.5 shrink-0 print:hidden">
+                              {renderFavoriteButton({
+                                itemType: 'dish',
+                                name: dish.name,
+                                englishName: dish.englishName || dish.name,
+                                greekName: dish.greekName || '',
+                                region: dish.regionOfOrigin || '',
+                                description: dish.description || '',
+                                officialWebsite: '',
+                                imageUrl: hasVerifiedImage(dish.imageUrl, keyId) ? dish.imageUrl || '' : '',
+                                priceLevel: '',
+                              })}
+                              <button
+                                type="button"
+                                onClick={() => handleSpeakPhrase(dish.greekName)}
+                                className="p-1.5 text-sky-700 dark:text-sky-400 hover:bg-sky-50 dark:hover:bg-slate-800 rounded-lg transition-colors shrink-0 cursor-pointer"
+                                title={t.matchmaker.pronounceLabel}
+                              >
+                                <Volume2 className="w-4 h-4" />
+                              </button>
+                            </div>
                           </div>
 
                           <div className="text-xs text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-2">
@@ -1488,12 +1611,25 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
                         } flex flex-col justify-between space-y-3`}
                       >
                         <div className="space-y-1.5">
-                          <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-                            <span className="font-bold text-sky-700 dark:text-sky-400 tabular-nums shrink-0">
-                              #{rankNum}
-                            </span>
-                            <span aria-hidden="true">·</span>
-                            <span className="truncate">{gem.region}</span>
+                          <div className="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="font-bold text-sky-700 dark:text-sky-400 tabular-nums shrink-0">
+                                #{rankNum}
+                              </span>
+                              <span aria-hidden="true">·</span>
+                              <span className="truncate">{gem.region}</span>
+                            </div>
+                            {renderFavoriteButton({
+                              itemType: 'gem',
+                              name: gem.title,
+                              englishName: gem.englishName || gem.title,
+                              greekName: gem.greekTitle || '',
+                              region: gem.region || '',
+                              description: gem.description || '',
+                              officialWebsite: website || '',
+                              imageUrl: hasImg ? gem.imageUrl || '' : '',
+                              priceLevel: '',
+                            })}
                           </div>
                           <h3 className="font-bold text-base text-slate-900 dark:text-white leading-tight">
                             {gem.title}

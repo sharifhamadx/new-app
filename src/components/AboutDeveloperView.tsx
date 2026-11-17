@@ -47,7 +47,10 @@ interface AdminContactMessage {
   message: string;
 }
 
-export const AboutDeveloperView: React.FC<AboutDeveloperViewProps> = ({ currentLang, user }) => {
+export const AboutDeveloperView: React.FC<AboutDeveloperViewProps> = ({
+  currentLang,
+  user,
+}) => {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [message, setMessage] = useState('');

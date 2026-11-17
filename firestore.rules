@@ -108,6 +108,28 @@ service cloud.firestore {
         && data.notes is string && data.notes.size() <= 1500;
     }
 
+    function isValidFavoriteItem(data, userId, favId) {
+      return data.keys().hasAll([
+          'id', 'userId', 'itemType', 'name', 'englishName', 'greekName',
+          'region', 'description', 'officialWebsite', 'imageUrl', 'priceLevel', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'userId', 'itemType', 'name', 'englishName', 'greekName',
+          'region', 'description', 'officialWebsite', 'imageUrl', 'priceLevel', 'createdAt'
+        ])
+        && isValidId(data.id) && data.id == favId
+        && isValidId(data.userId) && data.userId == userId
+        && data.itemType in ['taverna', 'hotel', 'site', 'dish', 'gem']
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 200
+        && data.englishName is string && data.englishName.size() <= 200
+        && data.greekName is string && data.greekName.size() <= 200
+        && data.region is string && data.region.size() <= 120
+        && data.description is string && data.description.size() <= 1500
+        && data.officialWebsite is string && data.officialWebsite.size() <= 400
+        && data.imageUrl is string && data.imageUrl.size() <= 600
+        && data.priceLevel is string && data.priceLevel.size() <= 20;
+    }
+
     // 4. Collection Rules
     match /users/{userId} {
       allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
@@ -161,6 +183,18 @@ service cloud.firestore {
           && incoming().createdAt == request.time
           && exists(/databases/$(database)/documents/users/$(userId));
         allow delete: if isValidId(userId) && isValidId(searchId) && (isOwner(userId) || isAdmin());
+      }
+
+      match /favorites/{favId} {
+        allow get: if isValidId(userId) && isValidId(favId) && (isOwner(userId) || isAdmin());
+        allow list: if isValidId(userId) && (isOwner(userId) || isAdmin()) && resource.data.userId == userId;
+        allow create: if isValidId(userId)
+          && isValidId(favId)
+          && isOwner(userId)
+          && isValidFavoriteItem(incoming(), userId, favId)
+          && incoming().userId == request.auth.uid
+          && incoming().createdAt == request.time;
+        allow delete: if isValidId(userId) && isValidId(favId) && (isOwner(userId) || isAdmin());
       }
     }
 

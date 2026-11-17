@@ -6,6 +6,7 @@ import {
   useUiTranslation,
 } from '../hooks/useTranslatedContent';
 import { BrandLockup } from './BrandLogo';
+import { PWAInstallButton } from './PWAInstallBanner';
 import {
   Globe,
   Shield,
@@ -32,6 +33,7 @@ interface NavbarProps {
   onTabChange: (tab: ActiveTab) => void;
   theme: Theme;
   onToggleTheme: () => void;
+  favoritesCount?: number;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -46,6 +48,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onTabChange,
   theme,
   onToggleTheme,
+  favoritesCount = 0,
 }) => {
   const [langMenuOpen, setLangMenuOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -58,6 +61,13 @@ export const Navbar: React.FC<NavbarProps> = ({
     { id: 'explore', label: t.nav.explore },
     { id: 'dishes', label: t.nav.dishes },
     { id: 'hidden-gems', label: t.nav.hiddenGems },
+    {
+      id: 'favorites',
+      label:
+        favoritesCount > 0
+          ? `${t.nav.favorites || 'Saved Trip'} (${favoritesCount})`
+          : t.nav.favorites || 'Saved Trip',
+    },
     { id: 'about', label: t.nav.about },
     { id: 'terms', label: t.nav.terms },
   ];
@@ -112,6 +122,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           {/* Zone 3: Primary Action & Compact Utilities */}
           <div className="flex items-center gap-2 shrink-0">
+            <PWAInstallButton currentLang={currentLang} />
             {/* Theme Toggle */}
             <button
               type="button"

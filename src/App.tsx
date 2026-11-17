@@ -1,20 +1,48 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import { doc, onSnapshot, updateDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import {
+  collection,
+  doc,
+  onSnapshot,
+  updateDoc,
+  setDoc,
+  deleteDoc,
+  serverTimestamp,
+  query,
+  limit,
+} from 'firebase/firestore';
 import { auth, db, isAdminEmail, handleFirestoreError, OperationType } from './firebase';
-import { Language, User, ActiveTab, Theme, SubscriptionPlan } from './types';
+import {
+  Language,
+  User,
+  ActiveTab,
+  Theme,
+  SubscriptionPlan,
+  FavoriteItem,
+} from './types';
 import { Navbar } from './components/Navbar';
 import { MatchmakerView } from './components/MatchmakerView';
 import { ExploreView } from './components/ExploreView';
 import { DishesView } from './components/DishesView';
 import { HiddenGemsView } from './components/HiddenGemsView';
+import { FavoritesView } from './components/FavoritesView';
 import { AboutDeveloperView } from './components/AboutDeveloperView';
 import { TermsView } from './components/TermsView';
 import { GoogleSignInModal } from './components/GoogleSignInModal';
 import { TermsModal } from './components/TermsModal';
 import { PremiumModal } from './components/PremiumModal';
 import { Footer } from './components/Footer';
+import { OfflineIndicator } from './components/PWAInstallBanner';
 import { isRtlLanguage, useUiTranslation } from './hooks/useTranslatedContent';
+
+function makeFavoriteDocId(itemType: string, nameKey: string): string {
+  const safe = `${itemType}_${nameKey}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 96);
+  return safe || `${itemType}_${Date.now()}`;
+}
 
 export default function App() {
   const [currentLang, setCurrentLang] = useState<Language>(() => {
@@ -32,6 +60,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('matchmaker');
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
+
+  const [favorites, setFavorites] = useState<FavoriteItem[]>([]);
 
   const [isSignInOpen, setIsSignInOpen] = useState(false);
   const [isTermsOpen, setIsTermsOpen] = useState(false);
@@ -56,18 +86,24 @@ export default function App() {
     document.documentElement.dir = isRtlLanguage(currentLang) ? 'rtl' : 'ltr';
   }, [currentLang]);
 
-  // Real Firebase Auth + Firestore real-time user listener across all devices
+  // Real Firebase Auth + Firestore real-time user + favorites listener across all devices
   useEffect(() => {
     let unsubUserDoc: (() => void) | null = null;
+    let unsubFavorites: (() => void) | null = null;
 
     const unsubAuth = onAuthStateChanged(auth, async (fbUser) => {
       if (unsubUserDoc) {
         unsubUserDoc();
         unsubUserDoc = null;
       }
+      if (unsubFavorites) {
+        unsubFavorites();
+        unsubFavorites = null;
+      }
 
       if (!fbUser || !fbUser.email) {
         setUser(null);
+        setFavorites([]);
         setAuthReady(true);
         return;
       }
@@ -75,6 +111,16 @@ export default function App() {
       const cleanEmail = fbUser.email.trim().toLowerCase();
       const admin = isAdminEmail(cleanEmail);
       const userRef = doc(db, 'users', fbUser.uid);
+
+      // Hydrate offline favorites cache immediately
+      try {
+        const offlineFavs = localStorage.getItem(`aegea_favorites_offline_${fbUser.uid}`);
+        if (offlineFavs) {
+          setFavorites(JSON.parse(offlineFavs));
+        }
+      } catch {
+        // ignore storage errors
+      }
 
       unsubUserDoc = onSnapshot(
         userRef,
@@ -110,7 +156,6 @@ export default function App() {
             });
             setAuthReady(true);
           } else {
-            // Auto-provision user profile if authenticated via Google
             try {
               await setDoc(userRef, {
                 uid: fbUser.uid,
@@ -133,17 +178,39 @@ export default function App() {
           handleFirestoreError(error, OperationType.GET, `users/${fbUser.uid}`);
         }
       );
+
+      // Sync user's Saved Trip Favorites from Firestore + persist offline
+      const favsPath = `users/${fbUser.uid}/favorites`;
+      unsubFavorites = onSnapshot(
+        query(collection(db, favsPath), limit(100)),
+        (snap) => {
+          const list = snap.docs
+            .map((d) => ({ ...(d.data() as FavoriteItem), id: d.id }))
+            .sort((a: any, b: any) => (b?.createdAt?.seconds ?? 0) - (a?.createdAt?.seconds ?? 0));
+          setFavorites(list);
+          try {
+            localStorage.setItem(`aegea_favorites_offline_${fbUser.uid}`, JSON.stringify(list));
+          } catch {
+            // ignore quota errors
+          }
+        },
+        (err) => {
+          handleFirestoreError(err, OperationType.LIST, favsPath);
+        }
+      );
     });
 
     return () => {
       unsubAuth();
       if (unsubUserDoc) unsubUserDoc();
+      if (unsubFavorites) unsubFavorites();
     };
   }, []);
 
   const handleSignOut = async () => {
     await signOut(auth);
     setUser(null);
+    setFavorites([]);
   };
 
   const handleToggleTheme = () => {
@@ -179,6 +246,55 @@ export default function App() {
     }
   };
 
+  const handleToggleFavorite = useCallback(
+    async (item: Omit<FavoriteItem, 'id' | 'userId' | 'createdAt'>) => {
+      if (!user || !auth.currentUser) {
+        setIsSignInOpen(true);
+        return;
+      }
+      const favId = makeFavoriteDocId(item.itemType, item.englishName || item.name);
+      const favPath = `users/${user.uid}/favorites/${favId}`;
+      const existing = favorites.find((f) => f.id === favId);
+
+      try {
+        if (existing) {
+          await deleteDoc(doc(db, favPath));
+        } else {
+          await setDoc(doc(db, favPath), {
+            id: favId,
+            userId: user.uid,
+            itemType: item.itemType,
+            name: String(item.name || '').slice(0, 200),
+            englishName: String(item.englishName || item.name || '').slice(0, 200),
+            greekName: String(item.greekName || '').slice(0, 200),
+            region: String(item.region || '').slice(0, 120),
+            description: String(item.description || '').slice(0, 1500),
+            officialWebsite: String(item.officialWebsite || '').slice(0, 400),
+            imageUrl: String(item.imageUrl || '').slice(0, 600),
+            priceLevel: String(item.priceLevel || '').slice(0, 20),
+            createdAt: serverTimestamp(),
+          });
+        }
+      } catch (err) {
+        handleFirestoreError(err, existing ? OperationType.DELETE : OperationType.CREATE, favPath);
+      }
+    },
+    [user, favorites]
+  );
+
+  const handleRemoveFavorite = useCallback(
+    async (favId: string) => {
+      if (!user) return;
+      const favPath = `users/${user.uid}/favorites/${favId}`;
+      try {
+        await deleteDoc(doc(db, favPath));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, favPath);
+      }
+    },
+    [user]
+  );
+
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 selection:bg-sky-600 selection:text-white transition-colors duration-200">
       <Navbar
@@ -193,6 +309,7 @@ export default function App() {
         onTabChange={setActiveTab}
         theme={theme}
         onToggleTheme={handleToggleTheme}
+        favoritesCount={favorites.length}
       />
 
       <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 sm:pt-8 w-full">
@@ -200,6 +317,8 @@ export default function App() {
           <MatchmakerView
             currentLang={currentLang}
             user={user}
+            favorites={favorites}
+            onToggleFavorite={handleToggleFavorite}
             onOpenSignIn={() => setIsSignInOpen(true)}
             onOpenPremium={() => setIsPremiumOpen(true)}
             onOpenPartner={() => {
@@ -216,7 +335,23 @@ export default function App() {
 
         {activeTab === 'hidden-gems' && <HiddenGemsView currentLang={currentLang} />}
 
-        {activeTab === 'about' && <AboutDeveloperView currentLang={currentLang} user={user} />}
+        {activeTab === 'favorites' && (
+          <FavoritesView
+            currentLang={currentLang}
+            user={user}
+            favorites={favorites}
+            onRemoveFavorite={handleRemoveFavorite}
+            onOpenSignIn={() => setIsSignInOpen(true)}
+            onGoToMatchmaker={() => setActiveTab('matchmaker')}
+          />
+        )}
+
+        {activeTab === 'about' && (
+          <AboutDeveloperView
+            currentLang={currentLang}
+            user={user}
+          />
+        )}
 
         {activeTab === 'terms' && <TermsView currentLang={currentLang} />}
       </main>
@@ -226,6 +361,8 @@ export default function App() {
         onLanguageChange={setCurrentLang}
         onTabChange={setActiveTab}
       />
+
+      <OfflineIndicator currentLang={currentLang} />
 
       <GoogleSignInModal
         isOpen={isSignInOpen}
