@@ -1,6 +1,6 @@
 {
   "name": "Greek Food & Taverna AI Matchmaker",
   "description": "Discover authentic Greek tavernas, traditional dishes, and hidden scenic gems across Greece with AI-powered personalized recommendations in English, Arabic, and Greek.",
-  "requestFramePermissions": [],
+  "requestFramePermissions": ["camera", "microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

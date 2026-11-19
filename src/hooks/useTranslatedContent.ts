@@ -52,7 +52,7 @@ export function getLanguageShortLabel(lang: Language): string {
   return trimmed.slice(0, 6).toUpperCase();
 }
 
-const UI_CACHE_PREFIX = 'greek_guide_ui_v5_';
+const UI_CACHE_PREFIX = 'greek_guide_ui_v6_';
 const DATA_CACHE_PREFIX = 'greek_guide_data_v3_';
 
 const memoryUiCache: Record<string, any> = {};

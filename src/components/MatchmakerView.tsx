@@ -61,6 +61,7 @@ interface MatchmakerViewProps {
   onOpenSignIn: () => void;
   onOpenPremium: () => void;
   onOpenPartner?: () => void;
+  onOpenTranslator?: () => void;
   onDecrementSearch: () => Promise<void>;
   favorites?: FavoriteItem[];
   onToggleFavorite?: (item: Omit<FavoriteItem, 'id' | 'userId' | 'createdAt'>) => Promise<void>;
@@ -127,6 +128,7 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
   onOpenSignIn,
   onOpenPremium,
   onOpenPartner,
+  onOpenTranslator,
   onDecrementSearch,
   favorites = [],
   onToggleFavorite,
@@ -1135,6 +1137,19 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
             <p className="text-sm sm:text-base text-slate-600 dark:text-slate-300 max-w-2xl leading-relaxed">
               {t.matchmaker.heroSubtitle}
             </p>
+
+            {onOpenTranslator && (
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={onOpenTranslator}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-sky-50 dark:bg-slate-800 hover:bg-sky-100 dark:hover:bg-slate-700 text-sky-800 dark:text-sky-300 text-xs sm:text-sm font-semibold border border-sky-200/80 dark:border-slate-700 transition-colors cursor-pointer"
+                >
+                  <Languages className="w-4 h-4 shrink-0" />
+                  <span>{t.nav.translator || 'Live Translator'}</span>
+                </button>
+              </div>
+            )}
           </div>
 
           {/* User Quota / Sign-In Bar */}

@@ -73,4 +73,20 @@ if (Number.isFinite(runNumber) && runNumber > 0 && fs.existsSync(buildGradlePath
   fs.writeFileSync(buildGradlePath, gradle, 'utf8');
 }
 
-console.log('Configured AEGEA Android icons, Aegean blue launcher background, and version code.');
+const manifestPath = path.join(root, 'android', 'app', 'src', 'main', 'AndroidManifest.xml');
+if (fs.existsSync(manifestPath)) {
+  let manifest = fs.readFileSync(manifestPath, 'utf8');
+  const requiredTags = [
+    '<uses-permission android:name="android.permission.CAMERA" />',
+    '<uses-permission android:name="android.permission.RECORD_AUDIO" />',
+    '<uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />',
+    '<uses-feature android:name="android.hardware.camera" android:required="false" />',
+  ];
+  const missingTags = requiredTags.filter((tag) => !manifest.includes(tag));
+  if (missingTags.length > 0 && manifest.includes('<application')) {
+    manifest = manifest.replace('<application', `${missingTags.join('\n    ')}\n\n    <application`);
+    fs.writeFileSync(manifestPath, manifest, 'utf8');
+  }
+}
+
+console.log('Configured AEGEA Android icons, camera/mic permissions, and version code.');

@@ -23,6 +23,7 @@ import {
 } from './types';
 import { Navbar } from './components/Navbar';
 import { MatchmakerView } from './components/MatchmakerView';
+import { LiveTranslatorView } from './components/LiveTranslatorView';
 import { ExploreView } from './components/ExploreView';
 import { DishesView } from './components/DishesView';
 import { HiddenGemsView } from './components/HiddenGemsView';
@@ -326,9 +327,15 @@ export default function App() {
               setActiveTab('about');
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
+            onOpenTranslator={() => {
+              setActiveTab('translator');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
             onDecrementSearch={handleDecrementSearch}
           />
         )}
+
+        {activeTab === 'translator' && <LiveTranslatorView currentLang={currentLang} />}
 
         {activeTab === 'explore' && <ExploreView currentLang={currentLang} />}
 

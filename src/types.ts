@@ -175,4 +175,43 @@ export interface FavoriteItem {
   createdAt?: any;
 }
 
-export type ActiveTab = 'matchmaker' | 'explore' | 'dishes' | 'hidden-gems' | 'favorites' | 'about' | 'terms';
+export interface VisionTranslationItem {
+  originalText: string;
+  phoneticGreek: string;
+  translatedText: string;
+  priceOrDetail: string;
+  dietaryOrWarning: string;
+}
+
+export interface VisionTranslationResult {
+  detectedCategory: string;
+  detectedLanguage: string;
+  headline: string;
+  summaryTranslation: string;
+  items: VisionTranslationItem[];
+  replyPhraseGreek: string;
+  replyPhrasePhonetic: string;
+  replyPhraseTranslation: string;
+}
+
+export interface VoiceTranslationTurn {
+  id: string;
+  speaker: 'visitor' | 'local';
+  sourceLanguage: string;
+  targetLanguage: string;
+  transcript: string;
+  translatedText: string;
+  greekPhonetic: string;
+  culturalTip: string;
+  timestamp: string;
+}
+
+export type ActiveTab =
+  | 'matchmaker'
+  | 'translator'
+  | 'explore'
+  | 'dishes'
+  | 'hidden-gems'
+  | 'favorites'
+  | 'about'
+  | 'terms';

@@ -19,6 +19,7 @@ import {
   Menu,
   X,
   Loader2,
+  Languages,
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -56,7 +57,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [customLangInput, setCustomLangInput] = useState('');
   const { t, isTranslatingUi } = useUiTranslation(currentLang);
 
-  const navItems: { id: ActiveTab; label: string }[] = [
+  // Original first-app navigation tabs kept intact in their original positions
+  const primaryNavItems: { id: ActiveTab; label: string }[] = [
     { id: 'matchmaker', label: t.nav.matchmaker },
     { id: 'explore', label: t.nav.explore },
     { id: 'dishes', label: t.nav.dishes },
@@ -70,6 +72,11 @@ export const Navbar: React.FC<NavbarProps> = ({
     },
     { id: 'about', label: t.nav.about },
     { id: 'terms', label: t.nav.terms },
+  ];
+
+  const allNavItems: { id: ActiveTab; label: string; isTranslator?: boolean }[] = [
+    ...primaryNavItems,
+    { id: 'translator', label: t.nav.translator || 'Live Translator', isTranslator: true },
   ];
 
   const handleNavClick = (tab: ActiveTab) => {
@@ -89,7 +96,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   return (
     <header className="sticky top-0 z-40 bg-white/95 dark:bg-slate-950/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 transition-colors print:hidden">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between gap-4 sm:gap-8 h-16">
+        {/* Top Row: Brand Lockup & App Utilities */}
+        <div className="flex items-center justify-between gap-4 h-16">
           {/* Zone 1: Brand Crest + AEGEA + Smart Guide Subtitle */}
           <button
             type="button"
@@ -102,25 +110,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             />
           </button>
 
-          {/* Zone 2: Clean single-line navigation links */}
-          <nav className="hidden lg:flex items-center gap-6">
-            {navItems.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => handleNavClick(item.id)}
-                className={`text-sm font-medium whitespace-nowrap shrink-0 py-1 border-b-2 transition-colors cursor-pointer ${
-                  activeTab === item.id
-                    ? 'border-sky-700 dark:border-sky-400 text-slate-900 dark:text-white'
-                    : 'border-transparent text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:border-slate-300 dark:hover:border-slate-700'
-                }`}
-              >
-                {item.label}
-              </button>
-            ))}
-          </nav>
-
-          {/* Zone 3: Primary Action & Compact Utilities */}
+          {/* Zone 2: Primary Action & Compact Utilities */}
           <div className="flex items-center gap-2 shrink-0">
             <PWAInstallButton currentLang={currentLang} />
             {/* Theme Toggle */}
@@ -334,11 +324,11 @@ export const Navbar: React.FC<NavbarProps> = ({
               </button>
             )}
 
-            {/* Mobile drawer button */}
+            {/* Quick grid menu toggle on small mobile screens */}
             <button
               type="button"
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="lg:hidden p-2 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+              className="sm:hidden p-2 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
               aria-label="Toggle navigation menu"
             >
               {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
@@ -346,21 +336,58 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
         </div>
 
-        {/* Clean collapsible mobile menu */}
-        {mobileMenuOpen && (
-          <nav className="lg:hidden py-3 border-t border-slate-200 dark:border-slate-800 grid grid-cols-2 sm:grid-cols-3 gap-2">
-            {navItems.map((item) => (
+        {/* Dedicated Full Navigation Strip: Original App Menu Intact + Live Translator Beside It */}
+        <nav
+          aria-label="Main Navigation"
+          className="border-t border-slate-100 dark:border-slate-800/80 py-2 flex items-center justify-between gap-2 overflow-x-auto"
+        >
+          <div className="flex items-center gap-3 sm:gap-5 shrink-0">
+            {primaryNavItems.map((item) => (
               <button
                 key={item.id}
                 type="button"
                 onClick={() => handleNavClick(item.id)}
-                className={`px-3 py-2.5 text-xs font-semibold rounded-lg text-start whitespace-nowrap truncate transition-colors cursor-pointer ${
+                className={`text-xs sm:text-sm font-medium whitespace-nowrap shrink-0 py-1.5 border-b-2 transition-colors cursor-pointer ${
+                  activeTab === item.id
+                    ? 'border-sky-700 dark:border-sky-400 text-slate-900 dark:text-white font-semibold'
+                    : 'border-transparent text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:border-slate-300 dark:hover:border-slate-700'
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => handleNavClick('translator')}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-semibold whitespace-nowrap shrink-0 border transition-colors cursor-pointer ${
+              activeTab === 'translator'
+                ? 'bg-sky-700 border-sky-700 text-white'
+                : 'bg-sky-50 dark:bg-slate-800/90 border-sky-200 dark:border-slate-700 text-sky-800 dark:text-sky-300 hover:bg-sky-100 dark:hover:bg-slate-700'
+            }`}
+          >
+            <Languages className="w-4 h-4 shrink-0" />
+            <span>{t.nav.translator || 'Live Translator'}</span>
+          </button>
+        </nav>
+
+        {/* Optional quick grid drawer on small screens */}
+        {mobileMenuOpen && (
+          <nav className="sm:hidden py-3 border-t border-slate-200 dark:border-slate-800 grid grid-cols-2 gap-2">
+            {allNavItems.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => handleNavClick(item.id)}
+                className={`px-3 py-2.5 text-xs font-semibold rounded-lg text-start whitespace-nowrap truncate transition-colors cursor-pointer flex items-center gap-1.5 ${
                   activeTab === item.id
                     ? 'bg-sky-50 dark:bg-slate-800 text-sky-800 dark:text-sky-300'
                     : 'text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60'
                 }`}
               >
-                {item.label}
+                {item.isTranslator && <Languages className="w-3.5 h-3.5 shrink-0 text-sky-700 dark:text-sky-400" />}
+                <span className="truncate">{item.label}</span>
               </button>
             ))}
           </nav>

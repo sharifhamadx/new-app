@@ -38,7 +38,7 @@ app.use('/api', (req: Request, res: Response, next: NextFunction) => {
   return next();
 });
 
-app.use(express.json());
+app.use(express.json({ limit: '15mb' }));
 
 // Load Firebase config to verify Firebase ID tokens against Google Identity Toolkit
 let firebaseApiKey = '';
@@ -1220,7 +1220,7 @@ CRITICAL RULES:
     return res.json(responsePayload);
   } catch (err: any) {
     console.error('[RECOMMEND ERROR]', err);
-    return res.status(502).json({
+    return res.status(500).json({
       error: 'Live search could not be completed right now. Please try again shortly.',
     });
   }
@@ -1455,6 +1455,474 @@ app.post('/api/contact', (req: Request, res: Response) => {
   });
 });
 
+// ============================================================================
+// Live Visitor Translator: Gemini Vision (Menus & Signs), Voice & Neural TTS
+// ============================================================================
+const serverTtsCache = new Map<string, CacheEntry<string>>();
+
+const VISION_TRANSLATE_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    detectedCategory: {
+      type: Type.STRING,
+      description: "One of: 'menu', 'sign', 'receipt', 'general'",
+    },
+    detectedLanguage: { type: Type.STRING },
+    headline: { type: Type.STRING },
+    summaryTranslation: { type: Type.STRING },
+    items: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          originalText: { type: Type.STRING },
+          phoneticGreek: { type: Type.STRING },
+          translatedText: { type: Type.STRING },
+          priceOrDetail: { type: Type.STRING },
+          dietaryOrWarning: { type: Type.STRING },
+        },
+        required: ['originalText', 'phoneticGreek', 'translatedText', 'priceOrDetail', 'dietaryOrWarning'],
+      },
+    },
+    replyPhraseGreek: { type: Type.STRING },
+    replyPhrasePhonetic: { type: Type.STRING },
+    replyPhraseTranslation: { type: Type.STRING },
+  },
+  required: [
+    'detectedCategory',
+    'detectedLanguage',
+    'headline',
+    'summaryTranslation',
+    'items',
+    'replyPhraseGreek',
+    'replyPhrasePhonetic',
+    'replyPhraseTranslation',
+  ],
+};
+
+const VOICE_TRANSLATE_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    transcript: { type: Type.STRING },
+    detectedSourceLanguage: { type: Type.STRING },
+    translatedText: { type: Type.STRING },
+    greekPhonetic: { type: Type.STRING },
+    culturalTip: { type: Type.STRING },
+  },
+  required: ['transcript', 'detectedSourceLanguage', 'translatedText', 'greekPhonetic', 'culturalTip'],
+};
+
+const ALLOWED_TTS_VOICES = new Set(['Kore', 'Puck', 'Charon', 'Fenrir', 'Zephyr']);
+
+function createServerGeminiClient(apiKey: string) {
+  return new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      timeout: 18000,
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+}
+
+// 1. Live Camera Vision Translator for Greek Menus, Street Signs & Notices
+app.post('/api/vision-translate', async (req: Request, res: Response) => {
+  const { imageBase64, mimeType = 'image/jpeg', targetLanguage = 'en', mode = 'auto' } = req.body || {};
+
+  if (!imageBase64 || typeof imageBase64 !== 'string') {
+    return res.status(400).json({ error: 'A camera frame or image is required.' });
+  }
+
+  const cleanBase64 = imageBase64.replace(/^data:[^;]+;base64,/, '').trim();
+  if (!cleanBase64 || cleanBase64.length > 14 * 1024 * 1024) {
+    return res.status(400).json({ error: 'Image payload is invalid or too large (max 10MB).' });
+  }
+
+  const safeMime = /^image\/(jpeg|jpg|png|webp|heic|heif)$/i.test(String(mimeType))
+    ? String(mimeType).toLowerCase() === 'image/jpg'
+      ? 'image/jpeg'
+      : String(mimeType).toLowerCase()
+    : 'image/jpeg';
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return res.status(500).json({ error: 'Gemini API key is not configured on the server.' });
+  }
+
+  const targetLangName = resolveLanguageName(targetLanguage);
+  const modeHint =
+    mode === 'menu'
+      ? 'Focus on extracting restaurant menu items, dish descriptions, traditional Greek ingredients, prices (€), and clear dietary/allergen notes (especially Pork vs Halal-friendly, Seafood, Vegetarian, Vegan, Gluten, Dairy/Nuts).'
+      : mode === 'sign'
+      ? 'Focus on translating street signs, port/ferry departure boards, museum/site hours, traffic/parking notices, and practical directions clearly.'
+      : 'Automatically detect whether this is a Greek restaurant menu, street/ferry/museum sign, receipt, or general text and extract the most helpful structured translation.';
+
+  const ai = createServerGeminiClient(apiKey);
+  const prompt = `You are a real-time bilingual visual interpreter for visitors in Greece.
+Analyze this image and translate all visible text into natural, fluent ${targetLangName}.
+${modeHint}
+
+RULES:
+- ONLY extract text and items that are ACTUALLY visibly printed or handwritten inside the image. NEVER invent, guess, or fabricate dishes, prices, or signs if the photo is blank, dark, blurry, or contains no readable text.
+- Write "headline", "summaryTranslation", "translatedText", "priceOrDetail", "dietaryOrWarning", and "replyPhraseTranslation" in fluent ${targetLangName}.
+- In "originalText", preserve the exact original text visible in the photo (especially Greek script).
+- In "phoneticGreek", provide easy Latin phonetic pronunciation whenever the original text contains Greek; otherwise leave "".
+- Extract up to 14 key menu items, sign lines, or sections clearly.
+- In "replyPhraseGreek", provide one polite, natural Greek sentence the tourist can say or play aloud in this situation (e.g., ordering a dish, asking if it has pork, asking about ferry gate or ticket price), along with "replyPhrasePhonetic" and "replyPhraseTranslation" in ${targetLangName}.
+- If no readable text is visible in the image, state clearly in "summaryTranslation" that no readable text was detected, set "replyPhraseGreek" to "", and return an empty "items" array.`;
+
+  const imagePart = {
+    inlineData: {
+      mimeType: safeMime,
+      data: cleanBase64,
+    },
+  };
+
+  const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-4-hydrogen'].filter((m) => isModelAvailable(m));
+  if (modelsToTry.length === 0) {
+    return res.status(429).json({ error: 'AI models are temporarily cooling down after quota limits. Please retry shortly.' });
+  }
+
+  let lastErr: any = null;
+  for (const model of modelsToTry) {
+    try {
+      const config: any = {
+        responseMimeType: 'application/json',
+        responseSchema: VISION_TRANSLATE_SCHEMA,
+        thinkingConfig: {
+          thinkingLevel: model === 'gemini-3.1-flash-lite' ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW,
+        },
+      };
+
+      const response = await ai.models.generateContent({
+        model,
+        contents: { parts: [imagePart, { text: prompt }] },
+        config,
+      });
+
+      const parsed = extractAndParseJSON(response.text || '{}');
+      return res.json({
+        result: {
+          detectedCategory: parsed.detectedCategory || mode || 'general',
+          detectedLanguage: parsed.detectedLanguage || 'Greek',
+          headline: parsed.headline || '',
+          summaryTranslation: parsed.summaryTranslation || '',
+          items: Array.isArray(parsed.items) ? parsed.items : [],
+          replyPhraseGreek: parsed.replyPhraseGreek || '',
+          replyPhrasePhonetic: parsed.replyPhrasePhonetic || '',
+          replyPhraseTranslation: parsed.replyPhraseTranslation || '',
+        },
+        modelUsed: model,
+      });
+    } catch (err: any) {
+      lastErr = err;
+      if (isQuotaError(err)) {
+        markModelQuotaExhausted(model);
+        continue;
+      }
+      console.warn(`[VISION TRANSLATE ERROR] ${model}:`, err?.message || err);
+    }
+  }
+
+  const statusCode = isQuotaError(lastErr) ? 429 : 500;
+  return res.status(statusCode).json({
+    error: lastErr?.message || 'Vision translation failed. Please check image clarity and try again.',
+  });
+});
+
+// 2. Real-Time Two-Way Voice Transcription + Translation
+app.post('/api/voice-translate', async (req: Request, res: Response) => {
+  const {
+    audioBase64,
+    mimeType = 'audio/webm',
+    text,
+    sourceLanguage = 'auto',
+    targetLanguage = 'el',
+    uiLanguage = 'en',
+  } = req.body || {};
+
+  if ((!audioBase64 || typeof audioBase64 !== 'string') && (!text || typeof text !== 'string' || !text.trim())) {
+    return res.status(400).json({ error: 'Audio recording or text is required.' });
+  }
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return res.status(500).json({ error: 'Gemini API key is not configured on the server.' });
+  }
+
+  const ai = createServerGeminiClient(apiKey);
+  const sourceLangName =
+    sourceLanguage === 'auto' ? 'the spoken language (auto-detect)' : resolveLanguageName(sourceLanguage);
+  const targetLangName = resolveLanguageName(targetLanguage);
+  const uiLangName = resolveLanguageName(uiLanguage);
+
+  let rawTranscript = typeof text === 'string' ? text.trim() : '';
+
+  // Step A: Transcribe speech audio via gemini-3.5-transcribe when audio is provided
+  if (audioBase64 && typeof audioBase64 === 'string') {
+    const cleanAudio = audioBase64.replace(/^data:[^;]+;base64,/, '').trim();
+    if (!cleanAudio || cleanAudio.length > 14 * 1024 * 1024) {
+      return res.status(400).json({ error: 'Audio clip is empty or exceeds maximum length.' });
+    }
+
+    const baseAudioMime = String(mimeType || 'audio/webm').split(';')[0].trim().toLowerCase();
+    const safeAudioMime = /^audio\/(webm|mp4|mpeg|mp3|wav|ogg|aac|flac|x-m4a)$/i.test(baseAudioMime)
+      ? baseAudioMime === 'audio/x-m4a'
+        ? 'audio/mp4'
+        : baseAudioMime
+      : 'audio/webm';
+
+    const audioPart = {
+      inlineData: {
+        mimeType: safeAudioMime,
+        data: cleanAudio,
+      },
+    };
+
+    if (isModelAvailable('gemini-3.5-transcribe')) {
+      try {
+        const transcribeResp = await ai.models.generateContent({
+          model: 'gemini-3.5-transcribe',
+          contents: {
+            parts: [
+              audioPart,
+              {
+                text: `Transcribe ONLY actual intelligible human speech spoken in this audio (${sourceLangName}) in its original script. If the audio is silent or contains only noise, tones, or unclear sound without real words, output strictly [NO_SPEECH]. Never invent or guess words.`,
+              },
+            ],
+          },
+        });
+        const transcribed = (transcribeResp.text || '').trim();
+        if (transcribed && transcribed !== '[NO_SPEECH]') {
+          rawTranscript = transcribed;
+        } else if (transcribed === '[NO_SPEECH]') {
+          return res.status(400).json({ error: 'No clear speech was detected. Please speak closer to the microphone.' });
+        }
+      } catch (err: any) {
+        if (isQuotaError(err)) {
+          markModelQuotaExhausted('gemini-3.5-transcribe');
+        }
+        console.warn('[TRANSCRIBE FALLBACK] Falling back to multimodal audio translation:', err?.message || err);
+      }
+    }
+
+    // Fallback: direct multimodal audio -> JSON transcription + translation
+    if (!rawTranscript) {
+      const audioModels = ['gemini-3.1-flash-lite', 'gemini-4-hydrogen'].filter((m) => isModelAvailable(m));
+      let audioErr: any = null;
+      for (const model of audioModels) {
+        try {
+          const directAudioResp = await ai.models.generateContent({
+            model,
+            contents: {
+              parts: [
+                audioPart,
+                {
+                  text: `Listen carefully to this spoken audio (expected: ${sourceLangName}).
+1. Transcribe ONLY actual intelligible spoken words faithfully in "transcript" in its original script. NEVER invent, guess, or fabricate words if only noise, tones, or silence are present.
+2. Identify the language in "detectedSourceLanguage".
+3. Translate the actual spoken words naturally into ${targetLangName} in "translatedText".
+4. If either language is Greek, write easy Latin phonetic pronunciation of the Greek phrase in "greekPhonetic" (otherwise "").
+5. Optionally include a very short 1-sentence politeness/travel tip in ${uiLangName} inside "culturalTip" (or "").
+CRITICAL: If no clear human speech is heard, set "transcript" to "" and "translatedText" to "".`,
+                },
+              ],
+            },
+            config: {
+              responseMimeType: 'application/json',
+              responseSchema: VOICE_TRANSLATE_SCHEMA,
+              thinkingConfig: {
+                thinkingLevel: model === 'gemini-3.1-flash-lite' ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW,
+              },
+            },
+          });
+          const parsedDirect = extractAndParseJSON(directAudioResp.text || '{}');
+          if (!parsedDirect.transcript?.trim()) {
+            return res.status(400).json({ error: 'No clear speech was detected. Please try speaking again.' });
+          }
+          return res.json({ result: parsedDirect });
+        } catch (err: any) {
+          audioErr = err;
+          if (isQuotaError(err)) {
+            markModelQuotaExhausted(model);
+            continue;
+          }
+        }
+      }
+      return res.status(isQuotaError(audioErr) ? 429 : 500).json({
+        error: audioErr?.message || 'Could not process audio translation.',
+      });
+    }
+  }
+
+  // Step B: Translate transcript (or typed input) into target language
+  try {
+    const translationResult = await callGeminiWithFallback(ai, {
+      models: ['gemini-3.1-flash-lite', 'gemini-4-hydrogen'],
+      contents: `You are a real-time conversational interpreter for travelers and locals in Greece.
+Source input (${sourceLangName}):
+"${rawTranscript}"
+
+Requirements:
+- Keep "transcript" equal to the cleaned spoken/typed phrase in its original language.
+- Set "detectedSourceLanguage" cleanly (e.g. "Arabic", "English", "Greek").
+- Translate naturally and politely into ${targetLangName} inside "translatedText".
+- If ${targetLangName} is Greek, provide simple Latin phonetic pronunciation in "greekPhonetic"; if translating FROM Greek to another language, put phonetic pronunciation of the Greek phrase in "greekPhonetic"; otherwise "".
+- Provide a brief helpful hospitality/context note in ${uiLangName} inside "culturalTip" if useful, otherwise "".`,
+      responseSchema: VOICE_TRANSLATE_SCHEMA,
+    });
+
+    const parsed = extractAndParseJSON(translationResult.text || '{}');
+    return res.json({
+      result: {
+        transcript: parsed.transcript || rawTranscript,
+        detectedSourceLanguage: parsed.detectedSourceLanguage || sourceLangName,
+        translatedText: parsed.translatedText || '',
+        greekPhonetic: parsed.greekPhonetic || '',
+        culturalTip: parsed.culturalTip || '',
+      },
+    });
+  } catch (err: any) {
+    return res.status(isQuotaError(err) ? 429 : 500).json({
+      error: err?.message || 'Translation failed. Please try again.',
+    });
+  }
+});
+
+function ensureWavBase64(base64Data: string, mimeType?: string): string {
+  const buf = Buffer.from(base64Data, 'base64');
+  // Already a valid WAV RIFF container
+  if (buf.length >= 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WAVE') {
+    return base64Data;
+  }
+  // If raw PCM (audio/L16 or audio/pcm), wrap standard 24kHz mono 16-bit WAV header
+  if (!mimeType || /pcm|l16/i.test(mimeType)) {
+    const rateMatch = mimeType?.match(/rate=(\d+)/i);
+    const sampleRate = rateMatch ? parseInt(rateMatch[1], 10) : 24000;
+    const numChannels = 1;
+    const bitsPerSample = 16;
+    const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+    const blockAlign = numChannels * (bitsPerSample / 8);
+    const dataSize = buf.length;
+    const header = Buffer.alloc(44);
+    header.write('RIFF', 0);
+    header.writeUInt32LE(36 + dataSize, 4);
+    header.write('WAVE', 8);
+    header.write('fmt ', 12);
+    header.writeUInt32LE(16, 16);
+    header.writeUInt16LE(1, 20);
+    header.writeUInt16LE(numChannels, 22);
+    header.writeUInt32LE(sampleRate, 24);
+    header.writeUInt32LE(byteRate, 28);
+    header.writeUInt16LE(blockAlign, 32);
+    header.writeUInt16LE(bitsPerSample, 34);
+    header.write('data', 36);
+    header.writeUInt32LE(dataSize, 40);
+    return Buffer.concat([header, buf]).toString('base64');
+  }
+  return base64Data;
+}
+
+// 3. Gemini 3.8 Neural Text-to-Speech (returns WAV audio/wav base64)
+app.post('/api/tts', async (req: Request, res: Response) => {
+  const { text, language = 'el', voiceName = 'Kore' } = req.body || {};
+
+  const cleanText = String(text || '').trim().slice(0, 1200);
+  if (!cleanText) {
+    return res.status(400).json({ error: 'Text is required for speech synthesis.' });
+  }
+
+  const safeVoice = ALLOWED_TTS_VOICES.has(String(voiceName)) ? String(voiceName) : 'Kore';
+  const langName = resolveLanguageName(language);
+  const ttsCacheKey = makeCacheKey({ cleanText, langName, safeVoice });
+
+  const cachedAudio = getFromTtlCache(serverTtsCache, ttsCacheKey);
+  if (cachedAudio) {
+    return res.json({ audioBase64: cachedAudio, mimeType: 'audio/wav' });
+  }
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return res.status(500).json({ error: 'Gemini API key is not configured on the server.' });
+  }
+
+  const aiDefault = createServerGeminiClient(apiKey);
+  const aiBeta = new GoogleGenAI({
+    apiKey,
+    apiVersion: 'v1beta',
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+
+  const ttsModels = ['gemini-3.8-flash-lite-tts', 'gemini-3.8-flash-tts'].filter((m) => isModelAvailable(m));
+  if (ttsModels.length === 0) {
+    return res.status(429).json({ error: 'Voice synthesis quota temporarily reached. Please retry shortly.' });
+  }
+
+  let lastErr: any = null;
+  for (const model of ttsModels) {
+    const attempts: { client: GoogleGenAI; config: any }[] = [
+      {
+        client: aiBeta,
+        config: {
+          responseModalities: ['AUDIO'],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: safeVoice },
+            },
+          },
+        },
+      },
+      {
+        client: aiDefault,
+        config: {
+          responseModalities: ['AUDIO'],
+        },
+      },
+    ];
+
+    for (const attempt of attempts) {
+      try {
+        const response = await attempt.client.models.generateContent({
+          model,
+          contents: cleanText,
+          config: attempt.config,
+        });
+
+        const part = response.candidates?.[0]?.content?.parts?.[0];
+        const rawAudio = part?.inlineData?.data;
+        const rawMime = part?.inlineData?.mimeType;
+        if (!rawAudio) {
+          throw new Error(`No audio returned from ${model}`);
+        }
+
+        const wavBase64 = ensureWavBase64(rawAudio, rawMime);
+        setInTtlCache(serverTtsCache, ttsCacheKey, wavBase64, 2 * 60 * 60 * 1000, 80);
+        return res.json({ audioBase64: wavBase64, mimeType: 'audio/wav', modelUsed: model });
+      } catch (err: any) {
+        lastErr = err;
+        if (isQuotaError(err)) {
+          markModelQuotaExhausted(model);
+          break;
+        }
+        const msg = String(err?.message || '');
+        if (/Unknown name/i.test(msg)) {
+          continue;
+        }
+        console.warn(`[TTS ERROR] ${model}:`, msg || err);
+      }
+    }
+  }
+
+  return res.status(isQuotaError(lastErr) ? 429 : 500).json({
+    error: lastErr?.message || 'Speech synthesis unavailable right now.',
+  });
+});
+
 // Always return JSON for unknown /api/* routes or unhandled API errors (never HTML)
 app.use('/api', (_req: Request, res: Response) => {
   res.status(404).json({ error: 'API endpoint not found.' });
@@ -1528,10 +1996,10 @@ async function startServer() {
         }
 
         const rawCode = Buffer.concat(chunks).toString('utf8');
-        const patchedCode = rawCode.replace(
-          'transport.connect(createHMRHandler(handleMessage));',
-          '/* HMR WebSocket disabled */'
-        );
+        const patchedCode = rawCode
+          .replace('transport.connect(createHMRHandler(handleMessage));', '/* HMR WebSocket disabled */')
+          .replace('else throw new SendBeforeConnectError("send was called before connect");', 'else return;')
+          .replace('else throw new SendBeforeConnectError("invoke was called before connect");', 'else return;');
 
         res.writeHead = origWriteHead;
         res.write = origWrite;
