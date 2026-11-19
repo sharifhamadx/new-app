@@ -12,6 +12,7 @@ export interface User {
   isPremium: boolean;
   termsAccepted: boolean;
   isAdmin?: boolean;
+  isGuest?: boolean;
   subscriptionPlan?: 'free' | SubscriptionPlan;
 }
 

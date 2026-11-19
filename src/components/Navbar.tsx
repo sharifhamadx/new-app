@@ -222,11 +222,13 @@ export const Navbar: React.FC<NavbarProps> = ({
                   />
                   <div className="text-start hidden sm:block">
                     <p className="text-xs font-semibold text-slate-900 dark:text-white leading-tight truncate max-w-[110px]">
-                      {user.name}
+                      {user.isGuest ? t.auth.guestBadge || 'Guest' : user.name}
                     </p>
                     <p className="text-[11px] text-slate-500 dark:text-slate-400 tabular-nums leading-tight">
                       {user.isAdmin
                         ? t.monetization.adminUnlimitedLabel
+                        : user.isGuest
+                        ? t.auth.guestUnlimitedLabel || 'Guest · Instant'
                         : user.isPremium
                         ? t.monetization.vipUnlimitedLabel
                         : `${user.searchesRemaining}/2`}
@@ -240,65 +242,91 @@ export const Navbar: React.FC<NavbarProps> = ({
                     onMouseLeave={() => setUserMenuOpen(false)}
                   >
                     <div className="border-b border-slate-100 dark:border-slate-800 pb-3">
-                      <p className="text-[11px] text-slate-400">{t.auth.signedInAs}</p>
-                      <p className="text-sm font-bold text-slate-900 dark:text-white truncate">{user.name}</p>
-                      <p className="text-xs text-slate-500 dark:text-slate-400 truncate">{user.email}</p>
+                      <p className="text-[11px] text-slate-400">
+                        {user.isGuest ? t.auth.guestBadge || 'Guest Mode' : t.auth.signedInAs}
+                      </p>
+                      <p className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                        {user.isGuest ? t.auth.guestBadge || 'AEGEA Guest' : user.name}
+                      </p>
+                      {!user.isGuest && (
+                        <p className="text-xs text-slate-500 dark:text-slate-400 truncate">{user.email}</p>
+                      )}
 
-                      <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-600 dark:text-slate-300">
-                        <MonitorSmartphone className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400 shrink-0" />
-                        <span>{t.navbar.syncedDevicesLabel}</span>
-                      </div>
-                    </div>
-
-                    <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 space-y-2">
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-slate-600 dark:text-slate-400">{t.monetization.currentPlan}</span>
-                        <span className="font-bold text-slate-900 dark:text-white flex items-center gap-1">
-                          {user.isAdmin ? (
-                            <>
-                              <Shield className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400" />
-                              <span>{t.monetization.adminRoleLabel}</span>
-                            </>
-                          ) : user.isPremium ? (
-                            <>
-                              <Crown className="w-3.5 h-3.5 text-amber-500" />
-                              <span>{t.monetization.vipUnlimitedLabel}</span>
-                            </>
-                          ) : (
-                            <span>{t.monetization.freeTrialLabel}</span>
-                          )}
-                        </span>
-                      </div>
-
-                      {(user.isAdmin || user.isPremium) ? (
-                        <div className="flex items-center justify-between text-xs text-slate-600 dark:text-slate-300 tabular-nums pt-1 border-t border-slate-200 dark:border-slate-700">
-                          <span>{t.monetization.searchesRemaining}</span>
-                          <span className="font-bold text-emerald-700 dark:text-emerald-400">
-                            {t.monetization.unlimitedValue || '∞'}
-                          </span>
+                      {!user.isGuest && (
+                        <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-600 dark:text-slate-300">
+                          <MonitorSmartphone className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400 shrink-0" />
+                          <span>{t.navbar.syncedDevicesLabel}</span>
                         </div>
-                      ) : (
-                        <>
-                          <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 tabular-nums">
-                            <span>{t.monetization.searchesRemaining}</span>
-                            <span className="font-bold text-sky-700 dark:text-sky-400">
-                              {user.searchesRemaining} / 2
-                            </span>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setUserMenuOpen(false);
-                              onOpenPremium();
-                            }}
-                            className="w-full py-2 px-3 bg-sky-700 hover:bg-sky-800 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                          >
-                            <Crown className="w-3.5 h-3.5 shrink-0" />
-                            <span className="truncate">{t.monetization.upgradeButton}</span>
-                          </button>
-                        </>
                       )}
                     </div>
+
+                    {user.isGuest ? (
+                      <div className="p-3 rounded-xl bg-sky-50 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-800 space-y-2">
+                        <p className="text-xs text-sky-900 dark:text-sky-200 leading-relaxed">
+                          {t.auth.guestNote}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setUserMenuOpen(false);
+                            onOpenSignIn();
+                          }}
+                          className="w-full py-2 px-3 bg-sky-700 hover:bg-sky-800 text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                        >
+                          {t.auth.signInWithGoogle}
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 space-y-2">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-slate-600 dark:text-slate-400">{t.monetization.currentPlan}</span>
+                          <span className="font-bold text-slate-900 dark:text-white flex items-center gap-1">
+                            {user.isAdmin ? (
+                              <>
+                                <Shield className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400" />
+                                <span>{t.monetization.adminRoleLabel}</span>
+                              </>
+                            ) : user.isPremium ? (
+                              <>
+                                <Crown className="w-3.5 h-3.5 text-amber-500" />
+                                <span>{t.monetization.vipUnlimitedLabel}</span>
+                              </>
+                            ) : (
+                              <span>{t.monetization.freeTrialLabel}</span>
+                            )}
+                          </span>
+                        </div>
+
+                        {(user.isAdmin || user.isPremium) ? (
+                          <div className="flex items-center justify-between text-xs text-slate-600 dark:text-slate-300 tabular-nums pt-1 border-t border-slate-200 dark:border-slate-700">
+                            <span>{t.monetization.searchesRemaining}</span>
+                            <span className="font-bold text-emerald-700 dark:text-emerald-400">
+                              {t.monetization.unlimitedValue || '∞'}
+                            </span>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+                              <span>{t.monetization.searchesRemaining}</span>
+                              <span className="font-bold text-sky-700 dark:text-sky-400">
+                                {user.searchesRemaining} / 2
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setUserMenuOpen(false);
+                                onOpenPremium();
+                              }}
+                              className="w-full py-2 px-3 bg-sky-700 hover:bg-sky-800 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                            >
+                              <Crown className="w-3.5 h-3.5 shrink-0" />
+                              <span className="truncate">{t.monetization.upgradeButton}</span>
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
 
                     <button
                       type="button"

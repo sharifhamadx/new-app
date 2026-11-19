@@ -400,6 +400,29 @@ export const LiveTranslatorView: React.FC<LiveTranslatorViewProps> = ({ currentL
       } catch (err: any) {
         setLoadingTtsId(null);
         stopTtsPlayback();
+        // Graceful fallback to native phone/browser SpeechSynthesis when offline or standalone APK
+        if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+          try {
+            window.speechSynthesis.cancel();
+            const utter = new SpeechSynthesisUtterance(clean);
+            const code = String(languageCode || 'el').toLowerCase();
+            utter.lang = code.startsWith('el')
+              ? 'el-GR'
+              : code.startsWith('ar')
+              ? 'ar-EG'
+              : code.startsWith('en')
+              ? 'en-US'
+              : code;
+            utter.rate = 0.9;
+            setPlayingTtsId(itemId);
+            utter.onend = () => setPlayingTtsId(null);
+            utter.onerror = () => setPlayingTtsId(null);
+            window.speechSynthesis.speak(utter);
+            return;
+          } catch {
+            // Fall through to error notice if speechSynthesis is unsupported
+          }
+        }
         const msg = err?.message || 'Speech playback failed.';
         if (subMode === 'camera') {
           setCameraError(msg);
