@@ -85,8 +85,22 @@ if (fs.existsSync(manifestPath)) {
   const missingTags = requiredTags.filter((tag) => !manifest.includes(tag));
   if (missingTags.length > 0 && manifest.includes('<application')) {
     manifest = manifest.replace('<application', `${missingTags.join('\n    ')}\n\n    <application`);
-    fs.writeFileSync(manifestPath, manifest, 'utf8');
   }
+
+  // Register custom scheme deep-link for Google Sign-In Chrome Custom Tab callback (com.aegea.smartguide://auth)
+  if (!manifest.includes('android:scheme="com.aegea.smartguide"') && manifest.includes('</activity>')) {
+    const authIntentFilter = `
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="com.aegea.smartguide" android:host="auth" />
+            </intent-filter>
+        </activity>`;
+    manifest = manifest.replace('</activity>', authIntentFilter);
+  }
+
+  fs.writeFileSync(manifestPath, manifest, 'utf8');
 }
 
-console.log('Configured AEGEA Android icons, camera/mic permissions, and version code.');
+console.log('Configured AEGEA Android icons, camera/mic permissions, auth deep-link, and version code.');

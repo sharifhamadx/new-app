@@ -1,6 +1,14 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider } from 'firebase/auth';
-import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
+import { getAuth, GoogleAuthProvider, User as FirebaseUser } from 'firebase/auth';
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  serverTimestamp,
+  getDocFromServer,
+} from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
@@ -69,6 +77,63 @@ export const ADMIN_EMAILS = [
 export function isAdminEmail(email?: string | null): boolean {
   if (!email) return false;
   return ADMIN_EMAILS.includes(email.trim().toLowerCase());
+}
+
+export async function syncSignedInUserProfile(fbUser: FirebaseUser): Promise<void> {
+  if (!fbUser.email) {
+    throw new Error('Google account email is missing.');
+  }
+
+  const cleanEmail = fbUser.email.trim().toLowerCase();
+  const admin = isAdminEmail(cleanEmail);
+  const userRef = doc(db, 'users', fbUser.uid);
+
+  let existingSnap;
+  try {
+    existingSnap = await getDoc(userRef);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.GET, `users/${fbUser.uid}`);
+  }
+
+  const displayName = (fbUser.displayName || cleanEmail.split('@')[0] || 'Traveler').slice(0, 120);
+  const photoURL = (fbUser.photoURL || '').slice(0, 500);
+
+  if (!existingSnap || !existingSnap.exists()) {
+    try {
+      await setDoc(userRef, {
+        uid: fbUser.uid,
+        email: cleanEmail,
+        displayName,
+        photoURL,
+        searchesRemaining: admin ? 999999 : 2,
+        isPremium: admin,
+        subscriptionPlan: admin ? 'annual' : 'free',
+        termsAccepted: true,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, `users/${fbUser.uid}`);
+    }
+  } else {
+    try {
+      await updateDoc(userRef, {
+        displayName,
+        photoURL,
+        termsAccepted: true,
+        ...(admin
+          ? {
+              isPremium: true,
+              subscriptionPlan: 'annual',
+              searchesRemaining: 999999,
+            }
+          : {}),
+        updatedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `users/${fbUser.uid}`);
+    }
+  }
 }
 
 // Validate connection to Firestore on initial boot

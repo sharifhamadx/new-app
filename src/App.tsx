@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
-import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { onAuthStateChanged, signOut, signInWithCredential, GoogleAuthProvider } from 'firebase/auth';
+import { Capacitor } from '@capacitor/core';
+import { App as CapApp } from '@capacitor/app';
+import { Browser } from '@capacitor/browser';
 import {
   collection,
   doc,
@@ -12,7 +15,7 @@ import {
   where,
   limit,
 } from 'firebase/firestore';
-import { auth, db, isAdminEmail, handleFirestoreError, OperationType } from './firebase';
+import { auth, db, isAdminEmail, handleFirestoreError, OperationType, syncSignedInUserProfile } from './firebase';
 import {
   Language,
   User,
@@ -206,6 +209,44 @@ export default function App() {
       unsubAuth();
       if (unsubUserDoc) unsubUserDoc();
       if (unsubFavorites) unsubFavorites();
+    };
+  }, []);
+
+  // Handle Chrome Custom Tab -> com.aegea.smartguide://auth deep-link callback inside Android APK
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    let handlePromise = CapApp.addListener('appUrlOpen', async ({ url }) => {
+      if (!url || !url.startsWith('com.aegea.smartguide://auth')) return;
+      try {
+        await Browser.close().catch(() => {});
+        const parsed = new URL(url);
+        const idToken = parsed.searchParams.get('idToken') || '';
+        const accessToken = parsed.searchParams.get('accessToken') || '';
+        if (!idToken && !accessToken) {
+          window.dispatchEvent(
+            new CustomEvent('aegea:mobile-auth-error', {
+              detail: 'Missing Google authentication token.',
+            })
+          );
+          return;
+        }
+        const credential = GoogleAuthProvider.credential(idToken || null, accessToken || null);
+        const res = await signInWithCredential(auth, credential);
+        await syncSignedInUserProfile(res.user);
+        setIsSignInOpen(false);
+        window.dispatchEvent(new CustomEvent('aegea:mobile-auth-complete'));
+      } catch (err: any) {
+        console.error('Native mobile auth callback error:', err);
+        window.dispatchEvent(
+          new CustomEvent('aegea:mobile-auth-error', {
+            detail: err?.message || 'Could not complete mobile Google Sign-In.',
+          })
+        );
+      }
+    });
+
+    return () => {
+      handlePromise.then((h) => h.remove()).catch(() => {});
     };
   }, []);
 

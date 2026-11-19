@@ -42,10 +42,19 @@ app.use(express.json({ limit: '15mb' }));
 
 // Load Firebase config to verify Firebase ID tokens against Google Identity Toolkit
 let firebaseApiKey = '';
+let firebaseClientConfig: Record<string, any> | null = null;
 try {
   const fbConfigRaw = fs.readFileSync(path.join(__dirname, 'firebase-applet-config.json'), 'utf8');
   const fbConfig = JSON.parse(fbConfigRaw);
   firebaseApiKey = fbConfig.apiKey || '';
+  firebaseClientConfig = {
+    apiKey: fbConfig.apiKey || '',
+    authDomain: fbConfig.authDomain || '',
+    projectId: fbConfig.projectId || '',
+    appId: fbConfig.appId || '',
+    storageBucket: fbConfig.storageBucket || '',
+    messagingSenderId: fbConfig.messagingSenderId || '',
+  };
 } catch (err) {
   console.warn('Could not read firebase-applet-config.json on server:', err);
 }
@@ -1921,6 +1930,94 @@ app.post('/api/tts', async (req: Request, res: Response) => {
   return res.status(isQuotaError(lastErr) ? 429 : 500).json({
     error: lastErr?.message || 'Speech synthesis unavailable right now.',
   });
+});
+
+// Mobile APK Authorized-Domain Google Sign-In Bridge (Chrome Custom Tab -> com.aegea.smartguide://auth)
+app.get('/api/mobile-auth/status', (_req: Request, res: Response) => {
+  res.json({
+    ready: Boolean(firebaseClientConfig?.apiKey && firebaseClientConfig?.authDomain),
+    scheme: 'com.aegea.smartguide',
+  });
+});
+
+app.get('/mobile-auth', (req: Request, res: Response) => {
+  if (!firebaseClientConfig?.apiKey) {
+    return res.status(500).send('Firebase configuration unavailable.');
+  }
+  const lang = String(req.query.lang || 'en').toLowerCase().startsWith('ar') ? 'ar' : 'en';
+  const isAr = lang === 'ar';
+  const safeCfgJson = JSON.stringify(firebaseClientConfig).replace(/</g, '\\u003c');
+
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  return res.send(`<!doctype html>
+<html lang="${isAr ? 'ar' : 'en'}" dir="${isAr ? 'rtl' : 'ltr'}">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+  <title>AEGEA — ${isAr ? 'تسجيل الدخول عبر Google' : 'Google Sign-In'}</title>
+  <style>
+    body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;background:#0f172a;color:#f8fafc;font-family:system-ui,-apple-system,sans-serif}
+    .card{width:100%;max-width:400px;background:#1e293b;border:1px solid #334155;border-radius:18px;padding:28px;text-align:center;box-shadow:0 20px 45px rgba(0,0,0,.4)}
+    .brand{font-size:22px;font-weight:800;letter-spacing:.04em;color:#38bdf8;margin:0 0 6px}
+    .sub{font-size:13px;color:#cbd5e1;margin:0 0 22px;line-height:1.55}
+    .btn{width:100%;padding:14px 18px;border:0;border-radius:12px;background:#0284c7;color:#fff;font-size:15px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:10px;text-decoration:none;box-sizing:border-box}
+    .btn:disabled{opacity:.6}
+    .btn-return{background:#059669;margin-top:14px;display:none}
+    .msg{margin-top:16px;font-size:13px;color:#cbd5e1;line-height:1.5;word-break:break-word}
+    .err{color:#fda4af}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1 class="brand">AEGEA</h1>
+    <p class="sub">${isAr ? 'تسجيل الدخول الآمن عبر Google لحسابك في تطبيق AEGEA، ثم العودة للتطبيق تلقائياً.' : 'Sign in securely with Google to continue inside the AEGEA Android app.'}</p>
+    <button id="loginBtn" class="btn" type="button">
+      <span>${isAr ? 'المتابعة باستخدام Google' : 'Continue with Google'}</span>
+    </button>
+    <a id="returnLink" class="btn btn-return" href="#">${isAr ? 'العودة إلى تطبيق AEGEA' : 'Return to AEGEA App'}</a>
+    <p id="statusMsg" class="msg"></p>
+  </div>
+  <script type="module">
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js';
+    import { getAuth, GoogleAuthProvider, signInWithPopup } from 'https://www.gstatic.com/firebasejs/11.6.0/firebase-auth.js';
+
+    const firebaseConfig = ${safeCfgJson};
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+
+    const btn = document.getElementById('loginBtn');
+    const returnLink = document.getElementById('returnLink');
+    const statusMsg = document.getElementById('statusMsg');
+
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      statusMsg.className = 'msg';
+      statusMsg.textContent = ${JSON.stringify(isAr ? 'جاري فتح نافذة Google...' : 'Opening Google Sign-In...')};
+      try {
+        const result = await signInWithPopup(auth, provider);
+        const cred = GoogleAuthProvider.credentialFromResult(result);
+        const idToken = cred?.idToken || '';
+        const accessToken = cred?.accessToken || '';
+        if (!idToken && !accessToken) {
+          throw new Error(${JSON.stringify(isAr ? 'لم يتم استلام رمز التحقق من Google.' : 'Missing Google OAuth credential.')});
+        }
+        const deepLink = 'com.aegea.smartguide://auth?idToken=' + encodeURIComponent(idToken) + '&accessToken=' + encodeURIComponent(accessToken);
+        returnLink.href = deepLink;
+        returnLink.style.display = 'inline-flex';
+        statusMsg.textContent = ${JSON.stringify(isAr ? 'تم التحقق بنجاح! جاري الرجوع للتطبيق...' : 'Signed in! Returning to AEGEA...')};
+        window.location.replace(deepLink);
+      } catch (err) {
+        btn.disabled = false;
+        statusMsg.className = 'msg err';
+        statusMsg.textContent = err?.message || ${JSON.stringify(isAr ? 'تعذر إتمام تسجيل الدخول.' : 'Could not complete sign-in.')};
+      }
+    });
+  </script>
+</body>
+</html>`);
 });
 
 // Always return JSON for unknown /api/* routes or unhandled API errors (never HTML)

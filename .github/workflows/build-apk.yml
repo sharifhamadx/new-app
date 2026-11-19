@@ -61,8 +61,8 @@ jobs:
           if [ ! -d "android" ]; then
             npx cap add android
           fi
-          node scripts/configure-android.mjs
           npx cap sync android
+          node scripts/configure-android.mjs
 
       - name: Build installable Android APK
         run: |
@@ -87,6 +87,6 @@ jobs:
           tag_name: apk-v1.${{ github.run_number }}
           name: AEGEA Smart Guide APK v1.${{ github.run_number }}
           body: |
-            Automated Android APK build for **AEGEA — Your Smart Guide**.
+            Automated Android APK build for **AEGEA — Your Smart Guide** (includes Full Greece Guide, Live Camera & Voice Translator with Gemini TTS, and Chrome Custom Tab Google Sign-In bridge).
             Download `AEGEA-Smart-Guide.apk` below directly on your Android phone and tap to install.
           files: AEGEA-Smart-Guide.apk

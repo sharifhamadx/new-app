@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { signInWithPopup } from 'firebase/auth';
-import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { auth, db, googleProvider, isAdminEmail, handleFirestoreError, OperationType } from '../firebase';
+import { Capacitor } from '@capacitor/core';
+import { Browser } from '@capacitor/browser';
+import { auth, googleProvider, syncSignedInUserProfile } from '../firebase';
 import { Language } from '../types';
 import { useUiTranslation } from '../hooks/useTranslatedContent';
+import { apiUrl } from '../utils/apiBase';
 import {
   X,
   ShieldCheck,
@@ -33,7 +35,62 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!isOpen) {
+      setLoading(false);
+      return;
+    }
+
+    const onComplete = () => {
+      setLoading(false);
+      setErrorMsg(null);
+      onClose();
+    };
+    const onErr = (ev: Event) => {
+      const detail = (ev as CustomEvent<string>)?.detail;
+      setLoading(false);
+      setErrorMsg(detail || t.auth.signInGenericError);
+    };
+
+    window.addEventListener('aegea:mobile-auth-complete', onComplete);
+    window.addEventListener('aegea:mobile-auth-error', onErr);
+
+    let browserHandle: any = null;
+    if (Capacitor.isNativePlatform()) {
+      browserHandle = Browser.addListener('browserFinished', () => {
+        setLoading(false);
+      });
+    }
+
+    return () => {
+      window.removeEventListener('aegea:mobile-auth-complete', onComplete);
+      window.removeEventListener('aegea:mobile-auth-error', onErr);
+      if (browserHandle?.then) {
+        browserHandle.then((h: any) => h.remove()).catch(() => {});
+      }
+    };
+  }, [isOpen, onClose, t.auth.signInGenericError]);
+
   if (!isOpen) return null;
+
+  const formatAuthError = (err: any): string => {
+    const code = err?.code || '';
+    if (code === 'auth/popup-closed-by-user') {
+      return t.auth.popupClosedError;
+    }
+    if (code === 'auth/popup-blocked') {
+      return t.auth.popupBlockedError;
+    }
+    if (code === 'auth/unauthorized-domain') {
+      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      const isAr = String(currentLang || '').toLowerCase().startsWith('ar');
+      if (isAr) {
+        return `هذا النطاق (${host}) غير مضاف بعد في قائمة النطاقات المصرح بها في Firebase Authentication. أضف "${host}" في إعدادات Firebase Auth (Authorized domains) أو أعد نشر التطبيق في AI Studio لتفعيل تسجيل الدخول المباشر عبر متصفح الهاتف.`;
+      }
+      return `Domain (${host}) is not listed in Firebase Authentication → Settings → Authorized domains yet. Add "${host}" in Firebase Console or republish the backend app for Chrome Custom Tab sign-in.`;
+    }
+    return err?.message || t.auth.signInGenericError;
+  };
 
   const handleGoogleSignIn = async () => {
     if (!termsAgreed) {
@@ -45,77 +102,38 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
     setErrorMsg(null);
 
     try {
+      // On native Android APK, prefer Chrome Custom Tab on our already-authorized backend domain
+      if (Capacitor.isNativePlatform()) {
+        let bridgeReady = false;
+        try {
+          const statusRes = await fetch(apiUrl('/api/mobile-auth/status'), {
+            signal: AbortSignal.timeout(3000),
+          });
+          if (statusRes.ok) {
+            const statusData = await statusRes.json().catch(() => null);
+            bridgeReady = Boolean(statusData?.ready);
+          }
+        } catch {
+          bridgeReady = false;
+        }
+
+        if (bridgeReady) {
+          await Browser.open({
+            url: apiUrl(`/mobile-auth?lang=${encodeURIComponent(currentLang)}`),
+            presentationStyle: 'popover',
+          });
+          return;
+        }
+      }
+
       const result = await signInWithPopup(auth, googleProvider);
-      const fbUser = result.user;
-
-      if (!fbUser.email) {
-        throw new Error('Google account email is missing.');
-      }
-
-      const cleanEmail = fbUser.email.trim().toLowerCase();
-      const admin = isAdminEmail(cleanEmail);
-      const userRef = doc(db, 'users', fbUser.uid);
-
-      let existingSnap;
-      try {
-        existingSnap = await getDoc(userRef);
-      } catch (err) {
-        handleFirestoreError(err, OperationType.GET, `users/${fbUser.uid}`);
-      }
-
-      const displayName = (fbUser.displayName || cleanEmail.split('@')[0] || 'Traveler').slice(0, 120);
-      const photoURL = (fbUser.photoURL || '').slice(0, 500);
-
-      if (!existingSnap || !existingSnap.exists()) {
-        try {
-          await setDoc(userRef, {
-            uid: fbUser.uid,
-            email: cleanEmail,
-            displayName,
-            photoURL,
-            searchesRemaining: admin ? 999999 : 2,
-            isPremium: admin,
-            subscriptionPlan: admin ? 'annual' : 'free',
-            termsAccepted: true,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
-        } catch (err) {
-          handleFirestoreError(err, OperationType.CREATE, `users/${fbUser.uid}`);
-        }
-      } else {
-        try {
-          await updateDoc(userRef, {
-            displayName,
-            photoURL,
-            termsAccepted: true,
-            ...(admin
-              ? {
-                  isPremium: true,
-                  subscriptionPlan: 'annual',
-                  searchesRemaining: 999999,
-                }
-              : {}),
-            updatedAt: serverTimestamp(),
-          });
-        } catch (err) {
-          handleFirestoreError(err, OperationType.UPDATE, `users/${fbUser.uid}`);
-        }
-      }
-
+      await syncSignedInUserProfile(result.user);
+      setLoading(false);
       onClose();
     } catch (err: any) {
       console.error('Google Sign-In error:', err);
-      const code = err?.code || '';
-      if (code === 'auth/popup-closed-by-user') {
-        setErrorMsg(t.auth.popupClosedError);
-      } else if (code === 'auth/popup-blocked') {
-        setErrorMsg(t.auth.popupBlockedError);
-      } else {
-        setErrorMsg(err?.message || t.auth.signInGenericError);
-      }
-    } finally {
       setLoading(false);
+      setErrorMsg(formatAuthError(err));
     }
   };
 
