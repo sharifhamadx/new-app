@@ -15,14 +15,12 @@ import {
   AlertCircle,
   MonitorSmartphone,
   Loader2,
-  Compass,
 } from 'lucide-react';
 
 interface GoogleSignInModalProps {
   isOpen: boolean;
   onClose: () => void;
   onOpenTerms: () => void;
-  onContinueAsGuest: () => void;
   currentLang: Language;
 }
 
@@ -30,7 +28,6 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
   isOpen,
   onClose,
   onOpenTerms,
-  onContinueAsGuest,
   currentLang,
 }) => {
   const { t } = useUiTranslation(currentLang);
@@ -88,9 +85,9 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
       const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
       const isAr = String(currentLang || '').toLowerCase().startsWith('ar');
       if (isAr) {
-        return `تسجيل الدخول المباشر عبر Google غير مفعّل لهذا النطاق (${host}). يمكنك الضغط على "دخول سريع كضيف" بالأسفل للعمل فوراً بدون أي حساب أو إعدادات!`;
+        return `هذا النطاق (${host}) غير مضاف بعد في قائمة النطاقات المصرح بها في Firebase Authentication. أضف "${host}" في إعدادات Firebase Auth (Authorized domains) أو أعد نشر التطبيق لتفعيل تسجيل الدخول عبر متصفح الهاتف.`;
       }
-      return `Google Sign-In is not enabled for "${host}". Use "Quick Guest Access" below right now with zero Firebase or Google setup!`;
+      return `Domain (${host}) is not listed in Firebase Authentication → Settings → Authorized domains yet. Add "${host}" in Firebase Console or republish the backend app for Chrome Custom Tab sign-in.`;
     }
     return err?.message || t.auth.signInGenericError;
   };
@@ -140,12 +137,6 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
     }
   };
 
-  const handleGuestAccess = () => {
-    setErrorMsg(null);
-    onContinueAsGuest();
-    onClose();
-  };
-
   return (
     <div
       className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4"
@@ -182,23 +173,20 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
             </div>
           )}
 
-          {/* Easy Zero-Setup Guest Access Card (Best option on Phone APK without Cloud setup) */}
-          <div className="p-4 rounded-xl bg-sky-50 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-800/80 space-y-3">
-            <p className="text-xs text-sky-950 dark:text-sky-100 leading-relaxed font-medium">
-              {t.auth.guestNote ||
-                'Browse tavernas, hotels, landmarks & save favorites right away without Firebase or Google sign-in.'}
-            </p>
-            <button
-              type="button"
-              onClick={handleGuestAccess}
-              className="w-full py-3 px-4 rounded-xl bg-sky-700 hover:bg-sky-800 text-white font-bold text-sm flex items-center justify-center gap-2 transition-colors shadow-xs cursor-pointer"
-            >
-              <Compass className="w-4 h-4 shrink-0" />
-              <span>{t.auth.continueAsGuest || 'Quick Guest Access (No Google Account Needed)'}</span>
-            </button>
+          {/* Cross-device info */}
+          <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 flex items-start gap-3">
+            <MonitorSmartphone className="w-5 h-5 text-sky-700 dark:text-sky-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+                {t.auth.simulationNotice}
+              </p>
+              <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                {t.auth.allDevicesNotice}
+              </p>
+            </div>
           </div>
 
-          {/* Mandatory Terms & Conditions Checkbox for Google Sign-In */}
+          {/* Mandatory Terms & Conditions Checkbox */}
           <div className="p-4 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/60 space-y-2.5">
             <p className="text-xs font-semibold text-amber-950 dark:text-amber-200 leading-snug">
               {t.auth.codeEntryConsentNotice}
@@ -271,15 +259,9 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
             <span>{t.auth.continueWithGoogle}</span>
           </button>
 
-          <div className="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
-            <span className="inline-flex items-center gap-1.5">
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-              <span>Firebase Google OAuth 2.0</span>
-            </span>
-            <span className="inline-flex items-center gap-1 text-[11px]">
-              <MonitorSmartphone className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400" />
-              <span>{t.navbar.syncedDevicesLabel}</span>
-            </span>
+          <div className="flex items-center justify-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            <span>Firebase Google OAuth 2.0</span>
           </div>
         </div>
       </div>

@@ -80,11 +80,6 @@ export const translations: Record<string, any> = {
       popupClosedError: 'Google Sign-In window was closed before completing.',
       popupBlockedError: 'Popup was blocked by your browser. Please allow popups and try again.',
       signInGenericError: 'Could not complete Google Sign-In. Please try again.',
-      continueAsGuest: 'Quick Guest Access (No Google Account Needed)',
-      guestNote: 'Browse tavernas, hotels, landmarks & save your favorites locally right away without Firebase or Google sign-in.',
-      guestBadge: 'Guest Mode',
-      guestUnlimitedLabel: 'Guest · Instant Guide',
-      guestSignInPrompt: 'Search immediately in Guest Mode — or sign in with Google to sync across devices.',
     },
     monetization: {
       vipPassBadge: 'AEGEA VIP Pass',
@@ -459,11 +454,6 @@ export const translations: Record<string, any> = {
       popupClosedError: 'تم إغلاق نافذة تسجيل الدخول عبر Google قبل إتمام العملية.',
       popupBlockedError: 'تم حظر النافذة المنبثقة من المتصفح. يرجى السماح بالنوافذ المنبثقة والمحاولة مجدداً.',
       signInGenericError: 'تعذر تسجيل الدخول عبر Google. يرجى المحاولة مرة أخرى.',
-      continueAsGuest: 'دخول سريع كضيف (بدون حساب Google)',
-      guestNote: 'استخدم دليل اليونان وابحث واحفظ مفضلتك على هاتفك فوراً بدون الحاجة لحساب Google أو إعدادات Firebase.',
-      guestBadge: 'وضع الضيف السريع',
-      guestUnlimitedLabel: 'ضيف · دليل فوري',
-      guestSignInPrompt: 'ابحث فوراً كضيف بدون تسجيل — أو سجّل بحساب Google لمزامنة رحلتك على كل الأجهزة.',
     },
     monetization: {
       vipPassBadge: 'عضوية AEGEA VIP',

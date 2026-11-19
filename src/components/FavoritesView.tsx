@@ -26,7 +26,6 @@ interface FavoritesViewProps {
   favorites: FavoriteItem[];
   onRemoveFavorite: (favId: string) => Promise<void>;
   onOpenSignIn: () => void;
-  onContinueAsGuest: () => void;
   onGoToMatchmaker: () => void;
 }
 
@@ -36,7 +35,6 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
   favorites,
   onRemoveFavorite,
   onOpenSignIn,
-  onContinueAsGuest,
   onGoToMatchmaker,
 }) => {
   const [filterType, setFilterType] = useState<'all' | FavoriteItemType>('all');
@@ -77,22 +75,13 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
               'Bookmark top tavernas, boutique hotels, and archaeological wonders synced across all your devices and available offline.'}
           </p>
         </div>
-        <div className="flex flex-wrap items-center justify-center gap-3">
-          <button
-            type="button"
-            onClick={onContinueAsGuest}
-            className="px-6 py-3 bg-sky-700 hover:bg-sky-800 text-white rounded-xl text-sm font-bold transition-colors cursor-pointer"
-          >
-            {t.auth.continueAsGuest || 'Quick Guest Access'}
-          </button>
-          <button
-            type="button"
-            onClick={onOpenSignIn}
-            className="px-5 py-3 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-xl text-sm font-semibold transition-colors cursor-pointer"
-          >
-            {t.auth.signInWithGoogle}
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={onOpenSignIn}
+          className="px-6 py-3 bg-sky-700 hover:bg-sky-800 text-white rounded-xl text-sm font-bold transition-colors cursor-pointer"
+        >
+          {t.auth.signInWithGoogle}
+        </button>
       </div>
     );
   }
@@ -103,11 +92,7 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
         <div className="space-y-1.5">
           <div className="flex items-center gap-2 text-sky-700 dark:text-sky-400 text-xs font-semibold">
             <Heart className="w-4 h-4 fill-rose-500 text-rose-500" />
-            <span>
-              {user.isGuest
-                ? t.auth.guestBadge || 'Guest Mode'
-                : t.navbar.syncedDevicesLabel}
-            </span>
+            <span>{t.navbar.syncedDevicesLabel}</span>
           </div>
           <h1 className="font-editorial text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">
             {t.favorites?.title || 'Saved Greece Trip Favorites'}

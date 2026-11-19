@@ -28,7 +28,6 @@ import {
 import { IMG_HERO_AEGEAN } from '../data/greekCuratedData';
 import { generateExecutivePdf } from '../utils/generateExecutivePdf';
 import { apiUrl } from '../utils/apiBase';
-import { runGuestGreeceSearch } from '../utils/guestGuideSearch';
 import {
   MapPin,
   Search,
@@ -60,7 +59,6 @@ interface MatchmakerViewProps {
   currentLang: Language;
   user: User | null;
   onOpenSignIn: () => void;
-  onContinueAsGuest?: () => void;
   onOpenPremium: () => void;
   onOpenPartner?: () => void;
   onOpenTranslator?: () => void;
@@ -128,7 +126,6 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
   currentLang,
   user,
   onOpenSignIn,
-  onContinueAsGuest,
   onOpenPremium,
   onOpenPartner,
   onOpenTranslator,
@@ -332,57 +329,8 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
   };
 
   const handleSearch = async () => {
-    const selectedCityObj = citiesList.find((c) => c.value === city) || citiesList[0];
-    const selectedFoodObj = foodTypesList.find((f) => f.value === foodType) || foodTypesList[0];
-    const normLang = String(currentLang || 'en').trim().toLowerCase();
-
-    const executeGuestDirectSearch = async () => {
-      if (!user) {
-        onContinueAsGuest?.();
-      }
-      const guestResult = await runGuestGreeceSearch({
-        city: selectedCityObj.value,
-        cityLabel: selectedCityObj.label,
-        foodType: selectedFoodObj.value,
-        foodLabel: selectedFoodObj.label,
-        guideCategory,
-        notes: optionalNotes.trim(),
-        lang: currentLang,
-      });
-      resultCacheRef.current = { [normLang]: guestResult };
-      setResult(guestResult);
-      try {
-        localStorage.setItem(
-          'aegea_offline_last_guide_v1',
-          JSON.stringify({ city: selectedCityObj.value, result: guestResult })
-        );
-      } catch {
-        // ignore storage quota errors
-      }
-      setTimeout(() => {
-        const resultsEl = document.getElementById('matchmaker-results');
-        if (resultsEl) {
-          resultsEl.scrollIntoView({ behavior: 'smooth' });
-        }
-      }, 150);
-    };
-
-    // Instant Guest Mode / zero-Google-login path (works natively in phone APK and browser without domain issues)
-    if (!user || user.isGuest || !auth.currentUser) {
-      setIsLoading(true);
-      setErrorMsg(null);
-      setFailedImages({});
-      setItinerary(null);
-      setItineraryError(null);
-      itineraryCacheRef.current = {};
-      try {
-        await executeGuestDirectSearch();
-      } catch (guestErr: any) {
-        console.error('Guest search error:', guestErr);
-        setErrorMsg(t.matchmaker.searchFailedError);
-      } finally {
-        setIsLoading(false);
-      }
+    if (!user || !auth.currentUser) {
+      onOpenSignIn();
       return;
     }
 
@@ -390,6 +338,9 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
       onOpenPremium();
       return;
     }
+
+    const selectedCityObj = citiesList.find((c) => c.value === city) || citiesList[0];
+    const selectedFoodObj = foodTypesList.find((f) => f.value === foodType) || foodTypesList[0];
 
     setIsLoading(true);
     setErrorMsg(null);
@@ -454,10 +405,8 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
       const response = attemptResult.res;
       const data = attemptResult.parsed;
 
-      // Graceful fallback if remote backend is 404/unavailable (e.g., standalone APK without live server)
-      if (!data || (response && response.status === 404)) {
-        await executeGuestDirectSearch();
-        return;
+      if (!data) {
+        throw new Error(t.matchmaker.warmingUpError);
       }
 
       if (!response || !response.ok) {
@@ -471,6 +420,7 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
         ...data,
         guideCategory,
       };
+      const normLang = String(currentLang || 'en').trim().toLowerCase();
       resultCacheRef.current = { [normLang]: finalResult };
       setResult(finalResult);
 
@@ -519,13 +469,8 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
       }, 150);
     } catch (error: any) {
       console.error('Live search error:', error);
-      // Last-resort automatic fallback to Guest Direct Search so user still gets a working guide
-      try {
-        await executeGuestDirectSearch();
-      } catch {
-        const msg = String(error?.message || '');
-        setErrorMsg(msg && !msg.includes('{') ? msg : t.matchmaker.searchFailedError);
-      }
+      const msg = String(error?.message || '');
+      setErrorMsg(msg && !msg.includes('{') ? msg : t.matchmaker.searchFailedError);
     } finally {
       setIsLoading(false);
     }
@@ -1207,26 +1152,13 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
             )}
           </div>
 
-          {/* User Quota / Guest / Sign-In Bar */}
+          {/* User Quota / Sign-In Bar */}
           <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-4">
             {user ? (
               user.isAdmin ? (
                 <p className="text-xs sm:text-sm font-semibold text-sky-700 dark:text-sky-400">
                   {t.matchmaker.adminUnlimitedNotice}
                 </p>
-              ) : user.isGuest ? (
-                <div className="flex flex-wrap items-center justify-between gap-3 w-full text-xs sm:text-sm">
-                  <span className="font-semibold text-sky-700 dark:text-sky-400">
-                    {t.auth.guestUnlimitedLabel || 'Guest · Instant Guide Active'}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={onOpenSignIn}
-                    className="text-slate-600 dark:text-slate-300 font-semibold underline hover:text-sky-700 dark:hover:text-sky-400 cursor-pointer"
-                  >
-                    {t.auth.signInWithGoogle}
-                  </button>
-                </div>
               ) : user.isPremium ? (
                 <p className="text-xs sm:text-sm font-semibold text-amber-600 dark:text-amber-400">
                   {t.matchmaker.vipUnlimitedNotice}
@@ -1253,26 +1185,15 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
             ) : (
               <div className="flex flex-wrap items-center justify-between gap-3 w-full">
                 <span className="text-xs sm:text-sm text-slate-600 dark:text-slate-300">
-                  {t.auth.guestSignInPrompt || t.auth.signInPrompt}
+                  {t.auth.signInPrompt}
                 </span>
-                <div className="flex flex-wrap items-center gap-2 shrink-0">
-                  {onContinueAsGuest && (
-                    <button
-                      type="button"
-                      onClick={onContinueAsGuest}
-                      className="px-3.5 py-2 bg-sky-700 hover:bg-sky-800 text-white rounded-lg text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer"
-                    >
-                      {t.auth.continueAsGuest || 'Quick Guest Access'}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={onOpenSignIn}
-                    className="px-3.5 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer"
-                  >
-                    {t.auth.signInWithGoogle}
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={onOpenSignIn}
+                  className="px-4 py-2 bg-sky-700 hover:bg-sky-800 text-white rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 transition-colors cursor-pointer"
+                >
+                  {t.auth.signInWithGoogle}
+                </button>
               </div>
             )}
           </div>

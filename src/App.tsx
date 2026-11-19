@@ -40,34 +40,6 @@ import { Footer } from './components/Footer';
 import { OfflineIndicator } from './components/PWAInstallBanner';
 import { isRtlLanguage, useUiTranslation } from './hooks/useTranslatedContent';
 
-const GUEST_MODE_STORAGE_KEY = 'aegea_guest_mode_v1';
-const GUEST_FAVS_STORAGE_KEY = 'aegea_guest_favorites_v1';
-
-function buildGuestUser(): User {
-  return {
-    uid: 'guest_local',
-    name: 'AEGEA Guest',
-    email: 'guest@aegea.app',
-    avatar:
-      'https://api.dicebear.com/7.x/initials/svg?seed=AEGEA&backgroundColor=0369a1',
-    searchesRemaining: 999999,
-    isPremium: false,
-    termsAccepted: true,
-    isAdmin: false,
-    isGuest: true,
-    subscriptionPlan: 'free',
-  };
-}
-
-function readGuestFavorites(): FavoriteItem[] {
-  try {
-    const raw = localStorage.getItem(GUEST_FAVS_STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as FavoriteItem[]) : [];
-  } catch {
-    return [];
-  }
-}
-
 function makeFavoriteDocId(itemType: string, nameKey: string): string {
   const safe = `${itemType}_${nameKey}`
     .toLowerCase()
@@ -135,26 +107,10 @@ export default function App() {
       }
 
       if (!fbUser || !fbUser.email) {
-        try {
-          if (localStorage.getItem(GUEST_MODE_STORAGE_KEY) === '1') {
-            setUser(buildGuestUser());
-            setFavorites(readGuestFavorites());
-            setAuthReady(true);
-            return;
-          }
-        } catch {
-          // ignore storage errors
-        }
         setUser(null);
         setFavorites([]);
         setAuthReady(true);
         return;
-      }
-
-      try {
-        localStorage.removeItem(GUEST_MODE_STORAGE_KEY);
-      } catch {
-        // ignore storage errors
       }
 
       const cleanEmail = fbUser.email.trim().toLowerCase();
@@ -294,28 +250,7 @@ export default function App() {
     };
   }, []);
 
-  const handleEnterGuestMode = useCallback(() => {
-    try {
-      localStorage.setItem(GUEST_MODE_STORAGE_KEY, '1');
-    } catch {
-      // ignore storage errors
-    }
-    setUser(buildGuestUser());
-    setFavorites(readGuestFavorites());
-    setAuthReady(true);
-  }, []);
-
   const handleSignOut = async () => {
-    if (user?.isGuest) {
-      try {
-        localStorage.removeItem(GUEST_MODE_STORAGE_KEY);
-      } catch {
-        // ignore storage errors
-      }
-      setUser(null);
-      setFavorites([]);
-      return;
-    }
     await signOut(auth);
     setUser(null);
     setFavorites([]);
@@ -326,7 +261,7 @@ export default function App() {
   };
 
   const handleDecrementSearch = async () => {
-    if (!user || user.isGuest || user.isPremium || user.isAdmin) return;
+    if (!user || user.isPremium || user.isAdmin) return;
     const nextCount = Math.max(0, user.searchesRemaining - 1);
     const userRef = doc(db, 'users', user.uid);
     try {
@@ -341,10 +276,6 @@ export default function App() {
 
   const handleUpgradeSuccess = async (plan: SubscriptionPlan) => {
     if (!user) return;
-    if (user.isGuest || !auth.currentUser) {
-      setIsSignInOpen(true);
-      return;
-    }
     const userRef = doc(db, 'users', user.uid);
     try {
       await updateDoc(userRef, {
@@ -360,42 +291,11 @@ export default function App() {
 
   const handleToggleFavorite = useCallback(
     async (item: Omit<FavoriteItem, 'id' | 'userId' | 'createdAt'>) => {
-      const favId = makeFavoriteDocId(item.itemType, item.englishName || item.name);
-
-      // Guest or non-Firebase session: save seamlessly in local device storage
-      if (!user || user.isGuest || !auth.currentUser) {
-        if (!user) {
-          handleEnterGuestMode();
-        }
-        const current = readGuestFavorites();
-        const exists = current.some((f) => f.id === favId);
-        const nextList: FavoriteItem[] = exists
-          ? current.filter((f) => f.id !== favId)
-          : [
-              {
-                id: favId,
-                userId: 'guest_local',
-                itemType: item.itemType,
-                name: String(item.name || '').slice(0, 200),
-                englishName: String(item.englishName || item.name || '').slice(0, 200),
-                greekName: String(item.greekName || '').slice(0, 200),
-                region: String(item.region || '').slice(0, 120),
-                description: String(item.description || '').slice(0, 1500),
-                officialWebsite: String(item.officialWebsite || '').slice(0, 400),
-                imageUrl: String(item.imageUrl || '').slice(0, 600),
-                priceLevel: String(item.priceLevel || '').slice(0, 20),
-                createdAt: { seconds: Math.floor(Date.now() / 1000) },
-              },
-              ...current,
-            ];
-        try {
-          localStorage.setItem(GUEST_FAVS_STORAGE_KEY, JSON.stringify(nextList));
-        } catch {
-          // ignore storage quota errors
-        }
-        setFavorites(nextList);
+      if (!user || !auth.currentUser) {
+        setIsSignInOpen(true);
         return;
       }
+      const favId = makeFavoriteDocId(item.itemType, item.englishName || item.name);
       const favPath = `users/${user.uid}/favorites/${favId}`;
       const existing = favorites.find((f) => f.id === favId);
 
@@ -422,22 +322,12 @@ export default function App() {
         handleFirestoreError(err, existing ? OperationType.DELETE : OperationType.CREATE, favPath);
       }
     },
-    [user, favorites, handleEnterGuestMode]
+    [user, favorites]
   );
 
   const handleRemoveFavorite = useCallback(
     async (favId: string) => {
       if (!user) return;
-      if (user.isGuest || !auth.currentUser) {
-        const nextList = readGuestFavorites().filter((f) => f.id !== favId);
-        try {
-          localStorage.setItem(GUEST_FAVS_STORAGE_KEY, JSON.stringify(nextList));
-        } catch {
-          // ignore storage quota errors
-        }
-        setFavorites(nextList);
-        return;
-      }
       const favPath = `users/${user.uid}/favorites/${favId}`;
       try {
         await deleteDoc(doc(db, favPath));
@@ -473,7 +363,6 @@ export default function App() {
             favorites={favorites}
             onToggleFavorite={handleToggleFavorite}
             onOpenSignIn={() => setIsSignInOpen(true)}
-            onContinueAsGuest={handleEnterGuestMode}
             onOpenPremium={() => setIsPremiumOpen(true)}
             onOpenPartner={() => {
               setActiveTab('about');
@@ -502,7 +391,6 @@ export default function App() {
             favorites={favorites}
             onRemoveFavorite={handleRemoveFavorite}
             onOpenSignIn={() => setIsSignInOpen(true)}
-            onContinueAsGuest={handleEnterGuestMode}
             onGoToMatchmaker={() => setActiveTab('matchmaker')}
           />
         )}
@@ -529,7 +417,6 @@ export default function App() {
         isOpen={isSignInOpen}
         onClose={() => setIsSignInOpen(false)}
         onOpenTerms={() => setIsTermsOpen(true)}
-        onContinueAsGuest={handleEnterGuestMode}
         currentLang={currentLang}
       />
 
