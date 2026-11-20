@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Language, DishRecommendation } from '../types';
-import { curatedDishes } from '../data/greekCuratedData';
+import { curatedDishes, curatedDishesAr } from '../data/greekCuratedData';
 import { translatePayloadViaServer, useUiTranslation } from '../hooks/useTranslatedContent';
 import { Volume2, Wine, Loader2 } from 'lucide-react';
 
@@ -17,8 +17,15 @@ export const DishesView: React.FC<DishesViewProps> = ({ currentLang }) => {
   const { t } = useUiTranslation(currentLang);
 
   useEffect(() => {
-    if (currentLang.toLowerCase() === 'en') {
+    const norm = currentLang.trim().toLowerCase();
+    if (norm === 'en' || norm === 'english') {
       setLocalizedDishes(curatedDishes);
+      setIsTranslating(false);
+      return;
+    }
+
+    if (norm === 'ar' || norm === 'arabic') {
+      setLocalizedDishes(curatedDishesAr);
       setIsTranslating(false);
       return;
     }
@@ -30,7 +37,7 @@ export const DishesView: React.FC<DishesViewProps> = ({ currentLang }) => {
       curatedDishes,
       currentLang,
       'curated',
-      'curated_dishes_v1',
+      'curated_dishes_v2',
       controller.signal
     )
       .then((translated) => {

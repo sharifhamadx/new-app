@@ -1,11 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import {
   Heart,
-  MapPin,
-  ExternalLink,
-  Globe,
   Building2,
-  Ticket,
   Trash2,
   UtensilsCrossed,
   Landmark,
@@ -19,6 +15,7 @@ import {
   User,
 } from '../types';
 import { useUiTranslation } from '../hooks/useTranslatedContent';
+import { PlaceActionLinks } from './PlaceActionLinks';
 
 interface FavoritesViewProps {
   currentLang: Language;
@@ -158,13 +155,14 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {filtered.map((item) => {
-            const mapsQuery = `${item.englishName || item.name} ${item.region}`;
-            const hotelUrl = `https://www.booking.com/searchresults.html?ss=${encodeURIComponent(
-              `${item.englishName || item.name} ${item.region} Greece`
-            )}`;
-            const tourUrl = `https://www.getyourguide.com/s/?q=${encodeURIComponent(
-              `${item.englishName || item.name} ${item.region}`
-            )}`;
+            const actionKind =
+              item.itemType === 'hotel'
+                ? 'hotel'
+                : item.itemType === 'site'
+                ? 'site'
+                : item.itemType === 'gem'
+                ? 'gem'
+                : 'taverna';
 
             return (
               <article
@@ -218,64 +216,32 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
                     </p>
                   </div>
 
-                  <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-100 dark:border-slate-800 text-xs">
+                  <div className="space-y-2 pt-3 border-t border-slate-100 dark:border-slate-800 text-xs">
                     {item.priceLevel && (
-                      <span className="font-semibold text-slate-800 dark:text-slate-200 tabular-nums">
-                        {item.priceLevel}
-                      </span>
+                      <div className="font-semibold text-slate-800 dark:text-slate-200 tabular-nums">
+                        {t.matchmaker.price}: {item.priceLevel}
+                      </div>
                     )}
 
-                    <div className="flex flex-wrap items-center gap-3">
-                      {item.itemType === 'hotel' && (
-                        <a
-                          href={hotelUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300 font-bold hover:bg-amber-100 transition-colors"
-                        >
-                          <Building2 className="w-3.5 h-3.5 shrink-0" />
-                          <span>{t.matchmaker.checkHotelRates}</span>
-                          <ExternalLink className="w-3 h-3 shrink-0" />
-                        </a>
-                      )}
-
-                      {item.itemType === 'site' && (
-                        <a
-                          href={tourUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-sky-50 dark:bg-sky-950/50 border border-sky-200 dark:border-sky-800 text-sky-800 dark:text-sky-300 font-bold hover:bg-sky-100 transition-colors"
-                        >
-                          <Ticket className="w-3.5 h-3.5 shrink-0" />
-                          <span>{t.matchmaker.bookTicketsAndTours}</span>
-                          <ExternalLink className="w-3 h-3 shrink-0" />
-                        </a>
-                      )}
-
-                      {item.officialWebsite && (
-                        <a
-                          href={item.officialWebsite}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-sky-700 dark:text-sky-400 font-semibold hover:underline"
-                        >
-                          <Globe className="w-3.5 h-3.5" />
-                          <span>{t.matchmaker.visitWebsite}</span>
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      )}
-
-                      <a
-                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-sky-700 dark:text-sky-400 font-semibold hover:underline"
-                      >
-                        <MapPin className="w-3.5 h-3.5" />
-                        <span>{t.matchmaker.googleMapsLabel}</span>
-                        <ExternalLink className="w-3 h-3" />
-                      </a>
-                    </div>
+                    {item.itemType !== 'dish' && (
+                      <PlaceActionLinks
+                        kind={actionKind}
+                        name={item.name}
+                        englishName={item.englishName}
+                        location={item.region}
+                        region={item.region}
+                        officialWebsite={item.officialWebsite}
+                        labels={{
+                          googleMapsLabel: t.matchmaker.googleMapsLabel,
+                          previewAndBookSite: t.matchmaker.previewAndBookSite,
+                          previewAndBookPlatform: t.matchmaker.previewAndBookPlatform,
+                          otherPlatformsLabel: t.matchmaker.otherPlatformsLabel,
+                          googleReviewsLabel: t.matchmaker.googleReviewsLabel,
+                          checkHotelRates: t.matchmaker.checkHotelRates,
+                          bookTicketsAndTours: t.matchmaker.bookTicketsAndTours,
+                        }}
+                      />
+                    )}
                   </div>
                 </div>
               </article>

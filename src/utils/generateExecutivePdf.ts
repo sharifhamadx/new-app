@@ -474,19 +474,36 @@ export async function generateExecutivePdf({
 
   renderDirectoryList(
     t?.matchmaker?.archaeologicalTitle || 'Archaeological & Historical Sites',
-    (result.archaeologicalSites || []).map((st, idx) => ({
-      rank: st.rank ?? idx + 1,
-      title: st.name,
-      subtitle: `${st.greekName} · ${st.era} · ${st.region}`,
-      metaRight: st.bestTimeToVisit,
-      description: st.description,
-      highlightsLine:
-        st.highlights?.length
-          ? `${t?.matchmaker?.highlightsLabel || 'Highlights'}: ${st.highlights.join(' · ')}`
-          : '',
-      tip: st.insiderTip,
-      website: st.officialWebsite,
-    }))
+    (result.archaeologicalSites || []).map((st, idx) => {
+      const nearbyParts: string[] = [];
+      if (st.highlights?.length) {
+        nearbyParts.push(`${t?.matchmaker?.highlightsLabel || 'Highlights'}: ${st.highlights.join(' · ')}`);
+      }
+      if (st.nearbyHotels?.length) {
+        nearbyParts.push(
+          `${t?.matchmaker?.nearbyHotelsTitle || 'Nearby Hotels'}: ${st.nearbyHotels
+            .map((h) => h.name)
+            .join(', ')}`
+        );
+      }
+      if (st.nearbyRestaurants?.length) {
+        nearbyParts.push(
+          `${t?.matchmaker?.nearbyRestaurantsTitle || 'Nearby Restaurants & Bars'}: ${st.nearbyRestaurants
+            .map((r) => r.name)
+            .join(', ')}`
+        );
+      }
+      return {
+        rank: st.rank ?? idx + 1,
+        title: st.name,
+        subtitle: `${st.greekName} · ${st.era} · ${st.region}`,
+        metaRight: st.bestTimeToVisit,
+        description: st.description,
+        highlightsLine: nearbyParts.join(' | '),
+        tip: st.insiderTip,
+        website: st.officialWebsite,
+      };
+    })
   );
 
   // Stamp Executive Footer with total page count on every page

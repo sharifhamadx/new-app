@@ -101,6 +101,21 @@ const SURVIVAL_PHRASES = [
 
 const HISTORY_STORAGE_KEY = 'aegea_translator_history_v1';
 
+function cleanApiError(rawError: any, fallback: string): string {
+  const msg = String(rawError || '').trim();
+  if (!msg) return fallback;
+  try {
+    if (msg.startsWith('{')) {
+      const parsed = JSON.parse(msg);
+      const inner = parsed?.error?.message || parsed?.error;
+      if (typeof inner === 'string' && inner.trim()) return inner.trim();
+    }
+  } catch {
+    // ignore nested JSON parse errors
+  }
+  return msg.length > 260 ? fallback : msg;
+}
+
 async function postJsonSafe<T>(endpoint: string, bodyObj: any, fallbackMsg: string): Promise<T> {
   const payload = JSON.stringify(bodyObj);
 
@@ -135,7 +150,7 @@ async function postJsonSafe<T>(endpoint: string, bodyObj: any, fallbackMsg: stri
     }
 
     if (!res.ok) {
-      throw new Error(data?.error || fallbackMsg);
+      throw new Error(cleanApiError(data?.error, fallbackMsg));
     }
 
     return data as T;
@@ -188,6 +203,22 @@ function readBlobAsDataUrl(blob: Blob): Promise<string> {
   });
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(`${label} timed out`)), ms);
+    promise.then(
+      (val) => {
+        window.clearTimeout(timer);
+        resolve(val);
+      },
+      (err) => {
+        window.clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
 async function blobToCompactAudioDataUrl(
   blob: Blob,
   fallbackMime: string
@@ -198,7 +229,11 @@ async function blobToCompactAudioDataUrl(
     try {
       const arrayBuf = await blob.arrayBuffer();
       tempCtx = new AudioCtx();
-      const decoded = await tempCtx.decodeAudioData(arrayBuf.slice(0));
+      const decoded = await withTimeout(
+        tempCtx.decodeAudioData(arrayBuf.slice(0)),
+        2500,
+        'decodeAudioData'
+      );
       const targetRate = 16000;
       const frameCount = Math.max(1, Math.ceil(decoded.duration * targetRate));
       const offline = new OfflineAudioContext(1, frameCount, targetRate);
@@ -218,14 +253,14 @@ async function blobToCompactAudioDataUrl(
       source.buffer = monoBuffer;
       source.connect(offline.destination);
       source.start(0);
-      const rendered = await offline.startRendering();
+      const rendered = await withTimeout(offline.startRendering(), 2500, 'offlineRender');
       const wavBlob = encodeMonoWav(rendered.getChannelData(0), targetRate);
       const wavDataUrl = await readBlobAsDataUrl(wavBlob);
       if (wavDataUrl) {
         return { dataUrl: wavDataUrl, mimeType: 'audio/wav' };
       }
     } catch {
-      // Fallback to raw MediaRecorder blob if decodeAudioData fails
+      // Fallback to raw MediaRecorder blob if decodeAudioData fails or times out
     } finally {
       if (tempCtx) {
         tempCtx.close().catch(() => {});
@@ -761,6 +796,7 @@ export const LiveTranslatorView: React.FC<LiveTranslatorViewProps> = ({ currentL
             const { dataUrl, mimeType } = await blobToCompactAudioDataUrl(blob, finalMime);
             if (!dataUrl) {
               setIsProcessingVoice(false);
+              setVoiceError('Could not read recorded audio data. Please try again.');
               return;
             }
             await submitVoiceTranslation({
@@ -770,8 +806,9 @@ export const LiveTranslatorView: React.FC<LiveTranslatorViewProps> = ({ currentL
               audioBase64: dataUrl,
               mimeType,
             });
-          } catch {
+          } catch (stopErr: any) {
             setIsProcessingVoice(false);
+            setVoiceError(cleanApiError(stopErr?.message, 'Could not process voice recording. Please try again.'));
           }
         };
 
@@ -783,6 +820,7 @@ export const LiveTranslatorView: React.FC<LiveTranslatorViewProps> = ({ currentL
         const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
         if (AudioCtx) {
           const ctx = new AudioCtx();
+          ctx.resume().catch(() => {});
           audioCtxRef.current = ctx;
           const src = ctx.createMediaStreamSource(stream);
           const analyser = ctx.createAnalyser();

@@ -2,6 +2,15 @@ export type Language = string;
 export type Theme = 'light' | 'dark';
 export type SubscriptionPlan = 'weekly_pass' | 'monthly' | 'annual';
 export type GuideCategory = 'all' | 'tavernas' | 'hotels' | 'archaeological';
+export type AtmospherePreference =
+  | 'any'
+  | 'seaside'
+  | 'beach'
+  | 'quiet'
+  | 'romantic'
+  | 'traditional'
+  | 'lively'
+  | 'historic';
 
 export interface User {
   uid: string;
@@ -29,7 +38,11 @@ export interface TavernaRecommendation {
   priceLevel: '€' | '€€' | '€€€';
   insiderTip: string;
   rating: number;
+  operatingStatus?: string;
+  openingHours?: string;
+  establishedYear?: string;
   officialWebsite?: string;
+  bookingUrl?: string;
   imageUrl?: string;
   coordinates?: {
     lat: number;
@@ -51,8 +64,20 @@ export interface HotelRecommendation {
   priceLevel: '€' | '€€' | '€€€';
   insiderTip: string;
   rating: number;
+  operatingStatus?: string;
+  openingHours?: string;
+  establishedYear?: string;
   officialWebsite?: string;
+  bookingUrl?: string;
   imageUrl?: string;
+}
+
+export interface NearbyPlaceRef {
+  name: string;
+  type?: string;
+  distance?: string;
+  note?: string;
+  specialty?: string;
 }
 
 export interface ArchaeologicalSite {
@@ -69,7 +94,12 @@ export interface ArchaeologicalSite {
   bestTimeToVisit: string;
   insiderTip: string;
   nearbyTavernaSuggestion: string;
+  nearbyHotels?: NearbyPlaceRef[];
+  nearbyRestaurants?: NearbyPlaceRef[];
+  operatingStatus?: string;
+  openingHours?: string;
   officialWebsite?: string;
+  bookingUrl?: string;
   imageUrl?: string;
 }
 
@@ -99,7 +129,10 @@ export interface HiddenGemSpot {
   whyVisit: string;
   bestTimeToVisit: string;
   nearbyTavernaSuggestion: string;
+  operatingStatus?: string;
+  openingHours?: string;
   officialWebsite?: string;
+  bookingUrl?: string;
   imageUrl?: string;
 }
 

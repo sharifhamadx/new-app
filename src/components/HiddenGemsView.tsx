@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Language, HiddenGemSpot } from '../types';
-import { curatedHiddenGems } from '../data/greekCuratedData';
+import { curatedHiddenGems, curatedHiddenGemsAr } from '../data/greekCuratedData';
 import { translatePayloadViaServer, useUiTranslation } from '../hooks/useTranslatedContent';
-import { Clock, Utensils, Loader2 } from 'lucide-react';
+import { PlaceActionLinks } from './PlaceActionLinks';
+import { Clock, Utensils, Loader2, CheckCircle2 } from 'lucide-react';
 
 interface HiddenGemsViewProps {
   currentLang: Language;
@@ -14,8 +15,15 @@ export const HiddenGemsView: React.FC<HiddenGemsViewProps> = ({ currentLang }) =
   const { t } = useUiTranslation(currentLang);
 
   useEffect(() => {
-    if (currentLang.toLowerCase() === 'en') {
+    const norm = currentLang.trim().toLowerCase();
+    if (norm === 'en' || norm === 'english') {
       setLocalizedGems(curatedHiddenGems);
+      setIsTranslating(false);
+      return;
+    }
+
+    if (norm === 'ar' || norm === 'arabic') {
+      setLocalizedGems(curatedHiddenGemsAr);
       setIsTranslating(false);
       return;
     }
@@ -27,7 +35,7 @@ export const HiddenGemsView: React.FC<HiddenGemsViewProps> = ({ currentLang }) =
       curatedHiddenGems,
       currentLang,
       'curated',
-      'curated_gems_v1',
+      'curated_gems_v2',
       controller.signal
     )
       .then((translated) => {
@@ -121,6 +129,30 @@ export const HiddenGemsView: React.FC<HiddenGemsViewProps> = ({ currentLang }) =
                     <span className="truncate">{gem.nearbyTavernaSuggestion}</span>
                   </div>
                 </div>
+
+                <div className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">
+                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                  <span>{gem.operatingStatus || t.matchmaker.activeNowBadge}</span>
+                </div>
+
+                <PlaceActionLinks
+                  kind="gem"
+                  name={gem.title}
+                  englishName={gem.englishName}
+                  location={gem.region}
+                  region={gem.region}
+                  officialWebsite={gem.officialWebsite}
+                  bookingUrl={gem.bookingUrl}
+                  labels={{
+                    googleMapsLabel: t.matchmaker.googleMapsLabel,
+                    previewAndBookSite: t.matchmaker.previewAndBookSite,
+                    previewAndBookPlatform: t.matchmaker.previewAndBookPlatform,
+                    otherPlatformsLabel: t.matchmaker.otherPlatformsLabel,
+                    googleReviewsLabel: t.matchmaker.googleReviewsLabel,
+                    checkHotelRates: t.matchmaker.checkHotelRates,
+                    bookTicketsAndTours: t.matchmaker.bookTicketsAndTours,
+                  }}
+                />
               </div>
             </div>
           </article>

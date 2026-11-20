@@ -160,22 +160,12 @@ export default function App() {
               subscriptionPlan: admin ? 'annual' : data.subscriptionPlan || 'free',
             });
             setAuthReady(true);
-          } else {
+          } else if (!snap.metadata.fromCache) {
             try {
-              await setDoc(userRef, {
-                uid: fbUser.uid,
-                email: cleanEmail,
-                displayName: (fbUser.displayName || cleanEmail.split('@')[0]).slice(0, 120),
-                photoURL: (fbUser.photoURL || '').slice(0, 500),
-                searchesRemaining: admin ? 999999 : 2,
-                isPremium: admin,
-                subscriptionPlan: admin ? 'annual' : 'free',
-                termsAccepted: true,
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp(),
-              });
+              await syncSignedInUserProfile(fbUser);
             } catch (err) {
-              handleFirestoreError(err, OperationType.CREATE, `users/${fbUser.uid}`);
+              console.error('Failed to sync signed-in profile:', err);
+              setAuthReady(true);
             }
           }
         },

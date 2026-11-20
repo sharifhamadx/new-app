@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { signInWithPopup } from 'firebase/auth';
 import { Capacitor } from '@capacitor/core';
 import { Browser } from '@capacitor/browser';
 import { auth, googleProvider, syncSignedInUserProfile } from '../firebase';
+import firebaseConfig from '../../firebase-applet-config.json';
 import { Language } from '../types';
 import { useUiTranslation } from '../hooks/useTranslatedContent';
 import { apiUrl } from '../utils/apiBase';
@@ -15,6 +16,7 @@ import {
   AlertCircle,
   MonitorSmartphone,
   Loader2,
+  RefreshCw,
 } from 'lucide-react';
 
 interface GoogleSignInModalProps {
@@ -34,20 +36,29 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
   const [termsAgreed, setTermsAgreed] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [showReloadAction, setShowReloadAction] = useState(false);
+
+  const signInInFlightRef = useRef(false);
+  const attemptIdRef = useRef(0);
 
   useEffect(() => {
     if (!isOpen) {
       setLoading(false);
+      setShowReloadAction(false);
+      signInInFlightRef.current = false;
       return;
     }
 
     const onComplete = () => {
+      signInInFlightRef.current = false;
       setLoading(false);
       setErrorMsg(null);
+      setShowReloadAction(false);
       onClose();
     };
     const onErr = (ev: Event) => {
       const detail = (ev as CustomEvent<string>)?.detail;
+      signInInFlightRef.current = false;
       setLoading(false);
       setErrorMsg(detail || t.auth.signInGenericError);
     };
@@ -58,6 +69,7 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
     let browserHandle: any = null;
     if (Capacitor.isNativePlatform()) {
       browserHandle = Browser.addListener('browserFinished', () => {
+        signInInFlightRef.current = false;
         setLoading(false);
       });
     }
@@ -73,33 +85,80 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
 
   if (!isOpen) return null;
 
-  const formatAuthError = (err: any): string => {
+  const checkHostAuthorizedNow = async (host: string): Promise<boolean> => {
+    try {
+      if (!firebaseConfig?.apiKey || !host) return false;
+      const res = await fetch(
+        `https://www.googleapis.com/identitytoolkit/v3/relyingparty/getProjectConfig?key=${encodeURIComponent(firebaseConfig.apiKey)}`,
+        { signal: AbortSignal.timeout(3000) }
+      );
+      if (!res.ok) return false;
+      const data = await res.json();
+      const domains: string[] = Array.isArray(data?.authorizedDomains) ? data.authorizedDomains : [];
+      return domains.some((d) => d.toLowerCase() === host.toLowerCase());
+    } catch {
+      return false;
+    }
+  };
+
+  const formatAuthError = async (err: any): Promise<{ message: string; needsReload: boolean }> => {
     const code = err?.code || '';
     if (code === 'auth/popup-closed-by-user') {
-      return t.auth.popupClosedError;
+      return { message: t.auth.popupClosedError, needsReload: false };
+    }
+    if (code === 'auth/cancelled-popup-request') {
+      return {
+        message:
+          t.auth.cancelledPopupError ||
+          'A Google Sign-In window is already active or was cancelled. Please wait a moment and try once more.',
+        needsReload: false,
+      };
     }
     if (code === 'auth/popup-blocked') {
-      return t.auth.popupBlockedError;
+      return { message: t.auth.popupBlockedError, needsReload: false };
     }
     if (code === 'auth/unauthorized-domain') {
       const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
       const isAr = String(currentLang || '').toLowerCase().startsWith('ar');
-      if (isAr) {
-        return `هذا النطاق (${host}) غير مضاف بعد في قائمة النطاقات المصرح بها في Firebase Authentication. أضف "${host}" في إعدادات Firebase Auth (Authorized domains) أو أعد نشر التطبيق لتفعيل تسجيل الدخول عبر متصفح الهاتف.`;
+      const authorizedNow = await checkHostAuthorizedNow(host);
+      if (authorizedNow) {
+        return {
+          message: isAr
+            ? `تم تفعيل النطاق (${host}) بنجاح، لكن المتصفح يحتفظ بالجلسة القديمة. اضغط على زر التحديث أدناه ثم سجل الدخول.`
+            : `Domain (${host}) is now authorized, but this tab still holds a cached session. Click Refresh below to reload and sign in.`,
+          needsReload: true,
+        };
       }
-      return `Domain (${host}) is not listed in Firebase Authentication → Settings → Authorized domains yet. Add "${host}" in Firebase Console or republish the backend app for Chrome Custom Tab sign-in.`;
+      if (isAr) {
+        return {
+          message: `هذا النطاق (${host}) غير مضاف بعد في قائمة النطاقات المصرح بها في Firebase Authentication. أضف "${host}" في إعدادات Firebase Auth (Authorized domains) ثم حدّث الصفحة.`,
+          needsReload: true,
+        };
+      }
+      return {
+        message: `Domain (${host}) is not listed in Firebase Authentication → Settings → Authorized domains yet. Add "${host}" in Firebase Console and refresh.`,
+        needsReload: true,
+      };
     }
-    return err?.message || t.auth.signInGenericError;
+    return { message: err?.message || t.auth.signInGenericError, needsReload: false };
   };
 
   const handleGoogleSignIn = async () => {
-    if (!termsAgreed) {
-      setErrorMsg(t.auth.agreementRequiredNotice);
+    if (signInInFlightRef.current || loading) {
       return;
     }
 
+    if (!termsAgreed) {
+      setErrorMsg(t.auth.agreementRequiredNotice);
+      setShowReloadAction(false);
+      return;
+    }
+
+    signInInFlightRef.current = true;
+    const currentAttemptId = ++attemptIdRef.current;
     setLoading(true);
     setErrorMsg(null);
+    setShowReloadAction(false);
 
     try {
       // On native Android APK, prefer Chrome Custom Tab on our already-authorized backend domain
@@ -128,12 +187,33 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
 
       const result = await signInWithPopup(auth, googleProvider);
       await syncSignedInUserProfile(result.user);
-      setLoading(false);
-      onClose();
+      if (attemptIdRef.current === currentAttemptId) {
+        signInInFlightRef.current = false;
+        setLoading(false);
+        onClose();
+      }
     } catch (err: any) {
-      console.error('Google Sign-In error:', err);
-      setLoading(false);
-      setErrorMsg(formatAuthError(err));
+      const code = err?.code || '';
+      const isBenignPopupCancel =
+        code === 'auth/popup-closed-by-user' ||
+        code === 'auth/cancelled-popup-request' ||
+        code === 'auth/popup-blocked';
+
+      if (code === 'auth/cancelled-popup-request' && attemptIdRef.current !== currentAttemptId) {
+        return;
+      }
+
+      if (!isBenignPopupCancel) {
+        console.warn('Google Sign-In failed:', code || err?.message || err);
+      }
+
+      const formatted = await formatAuthError(err);
+      if (attemptIdRef.current === currentAttemptId) {
+        signInInFlightRef.current = false;
+        setLoading(false);
+        setErrorMsg(formatted.message);
+        setShowReloadAction(formatted.needsReload);
+      }
     }
   };
 
@@ -167,9 +247,21 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
         {/* Body */}
         <div className="p-6 space-y-5">
           {errorMsg && (
-            <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs flex items-start gap-2.5">
-              <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
-              <span className="leading-relaxed">{errorMsg}</span>
+            <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs space-y-2.5">
+              <div className="flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+                <span className="leading-relaxed">{errorMsg}</span>
+              </div>
+              {showReloadAction && (
+                <button
+                  type="button"
+                  onClick={() => window.location.reload()}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs transition-colors cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>{t.auth.reloadAndRetry || 'Refresh Page & Retry'}</span>
+                </button>
+              )}
             </div>
           )}
 

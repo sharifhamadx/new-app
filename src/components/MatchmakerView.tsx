@@ -16,6 +16,7 @@ import {
   MatchmakerResult,
   SearchHistoryRecord,
   GuideCategory,
+  AtmospherePreference,
   TripItinerary,
   FavoriteItem,
   FavoriteItemType,
@@ -28,6 +29,7 @@ import {
 import { IMG_HERO_AEGEAN } from '../data/greekCuratedData';
 import { generateExecutivePdf } from '../utils/generateExecutivePdf';
 import { apiUrl } from '../utils/apiBase';
+import { PlaceActionLinks } from './PlaceActionLinks';
 import {
   MapPin,
   Search,
@@ -49,10 +51,17 @@ import {
   Calendar,
   FileDown,
   Loader2,
-  Ticket,
   Sparkles,
   Languages,
   Heart,
+  Waves,
+  Umbrella,
+  Moon,
+  Sunset,
+  Home,
+  Music,
+  Columns3,
+  CheckCircle2,
 } from 'lucide-react';
 
 interface MatchmakerViewProps {
@@ -85,22 +94,59 @@ const INTL_LOCALE_MAP: Record<string, string> = {
 const CITY_KEYS = [
   'Athens',
   'Thessaloniki',
+  'Chalkidiki',
   'Santorini',
   'Mykonos',
-  'Chania, Crete',
-  'Heraklion, Crete',
-  'Rhodes',
-  'Corfu',
-  'Nafplio',
-  'Delphi',
-  'Meteora',
   'Naxos',
   'Paros',
+  'Milos',
+  'Syros',
+  'Rhodes',
+  'Kos',
+  'Chania, Crete',
+  'Heraklion, Crete',
+  'Rethymno, Crete',
+  'Agios Nikolaos, Crete',
+  'Corfu',
   'Zakynthos',
   'Kefalonia',
+  'Lefkada',
+  'Nafplio',
+  'Kalamata & Mani',
+  'Monemvasia',
   'Olympia, Peloponnese',
+  'Delphi',
+  'Evia & Chalkida',
+  'Meteora',
+  'Volos & Pelion',
+  'Skiathos & Sporades',
+  'Ioannina & Zagori',
+  'Parga & Syvota',
+  'Patras & Achaea',
+  'Kavala & Thassos',
+  'Alexandroupoli & Thrace',
+  'Lesvos, Chios & Samos',
+  'Kastoria & Prespes',
   'All Greece',
 ];
+
+function resultHasTargetScript(resData: MatchmakerResult | null | undefined, lang: string): boolean {
+  if (!resData) return true;
+  const norm = String(lang || 'en').trim().toLowerCase();
+  const sampleTexts = [
+    ...(resData.tavernas || []).map((x) => x.description || ''),
+    ...(resData.hotels || []).map((x) => x.description || ''),
+    ...(resData.archaeologicalSites || []).map((x) => x.description || ''),
+    ...(resData.dishes || []).map((x) => x.description || ''),
+  ].filter(Boolean);
+  if (sampleTexts.length === 0) return true;
+  const joined = sampleTexts.join(' ');
+  if (norm === 'ar' || norm === 'arabic') return /[\u0600-\u06FF]/.test(joined);
+  if (norm === 'el' || norm === 'greek') return /[\u0370-\u03FF\u1F00-\u1FFF]/.test(joined);
+  if (norm === 'ru' || norm === 'russian') return /[\u0400-\u04FF]/.test(joined);
+  if (norm === 'zh' || norm === 'chinese') return /[\u4E00-\u9FFF]/.test(joined);
+  return true;
+}
 
 function formatLiveDate(lang: string): string {
   const norm = String(lang || 'en').trim().toLowerCase();
@@ -134,7 +180,9 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
   onToggleFavorite,
 }) => {
   const [city, setCity] = useState('Athens');
+  const [customCity, setCustomCity] = useState('');
   const [foodType, setFoodType] = useState('traditional');
+  const [atmosphere, setAtmosphere] = useState<AtmospherePreference>('any');
   const [guideCategory, setGuideCategory] = useState<GuideCategory>('all');
   const [optionalNotes, setOptionalNotes] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -236,8 +284,8 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
 
     translatePayloadDetailed(result, currentLang, 'result', undefined, controller.signal)
       .then(({ translated, quotaLimited }) => {
-        resultCacheRef.current[normLang] = translated;
         if (!quotaLimited) {
+          resultCacheRef.current[normLang] = translated;
           setResult(translated);
         }
       })
@@ -273,8 +321,8 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
 
     translatePayloadDetailed(itinerary, currentLang, 'itinerary', undefined, controller.signal)
       .then(({ translated, quotaLimited }) => {
-        itineraryCacheRef.current[normLang] = translated;
         if (!quotaLimited) {
+          itineraryCacheRef.current[normLang] = translated;
           setItinerary(translated);
         }
       })
@@ -315,6 +363,17 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
     { value: 'archaeological', label: t.matchmaker.categories.archaeological },
   ];
 
+  const atmospheresList: { value: AtmospherePreference; label: string }[] = [
+    { value: 'any', label: t.matchmaker.atmospheres?.any || 'All Styles' },
+    { value: 'seaside', label: t.matchmaker.atmospheres?.seaside || 'By the Sea' },
+    { value: 'beach', label: t.matchmaker.atmospheres?.beach || 'On the Beach' },
+    { value: 'quiet', label: t.matchmaker.atmospheres?.quiet || 'Quiet & Relaxing' },
+    { value: 'romantic', label: t.matchmaker.atmospheres?.romantic || 'Romantic & Sunset' },
+    { value: 'traditional', label: t.matchmaker.atmospheres?.traditional || 'Traditional Authentic' },
+    { value: 'lively', label: t.matchmaker.atmospheres?.lively || 'Lively Bars & Nightlife' },
+    { value: 'historic', label: t.matchmaker.atmospheres?.historic || 'Historic & Ruins View' },
+  ];
+
   const handleSpeakPhrase = (text: string) => {
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
@@ -340,7 +399,11 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
     }
 
     const selectedCityObj = citiesList.find((c) => c.value === city) || citiesList[0];
+    const effectiveCity = customCity.trim() || selectedCityObj.value;
+    const effectiveCityLabel = customCity.trim() || selectedCityObj.label;
     const selectedFoodObj = foodTypesList.find((f) => f.value === foodType) || foodTypesList[0];
+    const selectedAtmosphereObj =
+      atmospheresList.find((a) => a.value === atmosphere) || atmospheresList[0];
 
     setIsLoading(true);
     setErrorMsg(null);
@@ -352,34 +415,43 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
     try {
       const idToken = await auth.currentUser.getIdToken();
       const requestBody = JSON.stringify({
-        city: selectedCityObj.value,
+        city: effectiveCity,
         foodType: selectedFoodObj.label,
+        atmosphere: atmosphere === 'any' ? '' : selectedAtmosphereObj.label,
         guideCategory,
+        freshOnly: true,
         prompt: optionalNotes.trim(),
         language: getLanguageEnglishName(currentLang),
       });
 
       const callRecommendApi = async () => {
-        const res = await fetch(apiUrl('/api/recommend'), {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-            Authorization: `Bearer ${idToken}`,
-          },
-          body: requestBody,
-        });
-        const rawText = await res.text();
-        let parsed: any = null;
+        const controller = new AbortController();
+        const timeoutId = window.setTimeout(() => controller.abort(), 28000);
         try {
-          parsed = rawText ? JSON.parse(rawText) : null;
-        } catch {
-          parsed = null;
+          const res = await fetch(apiUrl('/api/recommend'), {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+              Authorization: `Bearer ${idToken}`,
+            },
+            body: requestBody,
+            signal: controller.signal,
+          });
+          const rawText = await res.text();
+          let parsed: any = null;
+          try {
+            parsed = rawText ? JSON.parse(rawText) : null;
+          } catch {
+            parsed = null;
+          }
+          return { res, rawText, parsed };
+        } finally {
+          window.clearTimeout(timeoutId);
         }
-        return { res, rawText, parsed };
       };
 
-      const retryDelays = [1200, 2500];
+      const retryDelays = [1000, 2200];
       let attemptResult: { res: globalThis.Response | null; rawText: string; parsed: any } = {
         res: null,
         rawText: '',
@@ -387,6 +459,7 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
       };
 
       for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
+        const attemptStart = Date.now();
         try {
           attemptResult = await callRecommendApi();
           const isTransientHtml = !attemptResult.parsed && attemptResult.rawText.trim().toLowerCase().startsWith('<!doctype');
@@ -396,8 +469,12 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
           if ((!isTransientHtml && !isTransientGateway && attemptResult.parsed) || attempt === retryDelays.length) {
             break;
           }
-        } catch (fetchErr) {
-          if (attempt === retryDelays.length) throw fetchErr;
+        } catch (fetchErr: any) {
+          const elapsed = Date.now() - attemptStart;
+          const isTimeoutOrLongDrop = fetchErr?.name === 'AbortError' || elapsed >= 18000;
+          if (attempt === retryDelays.length || isTimeoutOrLongDrop) {
+            throw fetchErr;
+          }
         }
         await new Promise((resolve) => setTimeout(resolve, retryDelays[attempt]));
       }
@@ -421,13 +498,13 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
         guideCategory,
       };
       const normLang = String(currentLang || 'en').trim().toLowerCase();
-      resultCacheRef.current = { [normLang]: finalResult };
+      resultCacheRef.current = resultHasTargetScript(finalResult, normLang) ? { [normLang]: finalResult } : {};
       setResult(finalResult);
 
       try {
         localStorage.setItem(
           'aegea_offline_last_guide_v1',
-          JSON.stringify({ city: selectedCityObj.value, result: finalResult })
+          JSON.stringify({ city: effectiveCity, result: finalResult })
         );
       } catch {
         // ignore storage quota errors
@@ -441,7 +518,10 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
       // Persist search summary in Firestore for cross-device history
       const searchId = `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       const searchPath = `users/${user.uid}/searches/${searchId}`;
-      const historyLabel = `${selectedCityObj.label} · ${selectedFoodObj.label}`;
+      const historyLabel =
+        atmosphere !== 'any'
+          ? `${effectiveCityLabel} · ${selectedAtmosphereObj.label} · ${selectedFoodObj.label}`
+          : `${effectiveCityLabel} · ${selectedFoodObj.label}`;
       const sanitizedLang = String(currentLang || 'en').trim().slice(0, 40);
       const safeFirestoreLang = sanitizedLang.length >= 2 ? sanitizedLang : 'en';
 
@@ -450,8 +530,8 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
           id: searchId,
           userId: user.uid,
           prompt: historyLabel.slice(0, 1000),
-          region: selectedCityObj.value.slice(0, 100),
-          mood: guideCategory.slice(0, 100),
+          region: effectiveCity.slice(0, 100),
+          mood: `${guideCategory}|${atmosphere}`.slice(0, 100),
           dietary: foodType.slice(0, 100),
           language: safeFirestoreLang,
           summary: String(data.summary || '').slice(0, 4000),
@@ -468,9 +548,17 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
         }
       }, 150);
     } catch (error: any) {
-      console.error('Live search error:', error);
       const msg = String(error?.message || '');
-      setErrorMsg(msg && !msg.includes('{') ? msg : t.matchmaker.searchFailedError);
+      const isNetworkInterruption =
+        error?.name === 'AbortError' ||
+        /failed to fetch|networkerror|load failed|network request failed|aborted/i.test(msg);
+      if (isNetworkInterruption) {
+        console.warn('Live search connection interrupted:', msg || error?.name);
+        setErrorMsg(t.matchmaker.warmingUpError);
+      } else {
+        console.error('Live search error:', error);
+        setErrorMsg(msg && !msg.includes('{') ? msg : t.matchmaker.searchFailedError);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -502,23 +590,30 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
       });
 
       const callItineraryApi = async () => {
-        const res = await fetch(apiUrl('/api/itinerary'), {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-            Authorization: `Bearer ${idToken}`,
-          },
-          body: payloadBody,
-        });
-        const rawText = await res.text();
-        let parsed: any = null;
+        const controller = new AbortController();
+        const timeoutId = window.setTimeout(() => controller.abort(), 25000);
         try {
-          parsed = rawText ? JSON.parse(rawText) : null;
-        } catch {
-          parsed = null;
+          const res = await fetch(apiUrl('/api/itinerary'), {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+              Authorization: `Bearer ${idToken}`,
+            },
+            body: payloadBody,
+            signal: controller.signal,
+          });
+          const rawText = await res.text();
+          let parsed: any = null;
+          try {
+            parsed = rawText ? JSON.parse(rawText) : null;
+          } catch {
+            parsed = null;
+          }
+          return { res, rawText, parsed };
+        } finally {
+          window.clearTimeout(timeoutId);
         }
-        return { res, rawText, parsed };
       };
 
       let { res, rawText, parsed } = await callItineraryApi();
@@ -535,9 +630,17 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
       itineraryCacheRef.current = { [normLang]: parsed.itinerary };
       setItinerary(parsed.itinerary);
     } catch (err: any) {
-      console.error('Itinerary generation error:', err);
       const msg = String(err?.message || '');
-      setItineraryError(msg && !msg.includes('{') ? msg : 'Could not generate 3-day itinerary.');
+      const isNetworkInterruption =
+        err?.name === 'AbortError' ||
+        /failed to fetch|networkerror|load failed|network request failed|aborted/i.test(msg);
+      if (isNetworkInterruption) {
+        console.warn('Itinerary connection interrupted:', msg || err?.name);
+        setItineraryError(t.matchmaker.warmingUpError);
+      } else {
+        console.error('Itinerary generation error:', err);
+        setItineraryError(msg && !msg.includes('{') ? msg : t.matchmaker.searchFailedError);
+      }
     } finally {
       setIsGeneratingItinerary(false);
     }
@@ -777,37 +880,56 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
                       </p>
                     </div>
 
+                    {(tavern.operatingStatus || tavern.openingHours || tavern.establishedYear) && (
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-emerald-700 dark:text-emerald-400 font-medium">
+                        {tavern.operatingStatus && (
+                          <span className="inline-flex items-center gap-1">
+                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                            <span>{tavern.operatingStatus}</span>
+                          </span>
+                        )}
+                        {tavern.establishedYear && (
+                          <span className="text-slate-500 dark:text-slate-400">
+                            · {tavern.establishedYear}
+                          </span>
+                        )}
+                        {tavern.openingHours && (
+                          <span className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-300">
+                            <Clock className="w-3 h-3 shrink-0 text-sky-600 dark:text-sky-400" />
+                            <span>{tavern.openingHours}</span>
+                          </span>
+                        )}
+                      </div>
+                    )}
+
                     {!hasImg && renderNoPhotoNotice(false, website, mapsQuery)}
 
-                    <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500 dark:text-slate-400 pt-1">
+                    <div className="flex items-center justify-between gap-3 text-xs text-slate-500 dark:text-slate-400 pt-1">
                       <span className="tabular-nums font-semibold text-slate-800 dark:text-slate-200">
-                        {tavern.priceLevel}
+                        {t.matchmaker.price}: {tavern.priceLevel}
                       </span>
-                      <div className="flex flex-wrap items-center gap-4 print:hidden">
-                        {hasImg && website && (
-                          <a
-                            href={website}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-sky-700 dark:text-sky-400 font-semibold hover:underline"
-                          >
-                            <Globe className="w-3.5 h-3.5" />
-                            <span>{t.matchmaker.visitWebsite}</span>
-                            <ExternalLink className="w-3 h-3" />
-                          </a>
-                        )}
-                        <a
-                          href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-sky-700 dark:text-sky-400 font-semibold hover:underline"
-                        >
-                          <MapPin className="w-3.5 h-3.5" />
-                          <span>{t.matchmaker.googleMapsLabel}</span>
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      </div>
+                      <span className="truncate text-[11px]">{tavern.location}</span>
                     </div>
+
+                    <PlaceActionLinks
+                      kind="taverna"
+                      name={tavern.name}
+                      englishName={tavern.englishName}
+                      location={tavern.location}
+                      region={tavern.region}
+                      officialWebsite={website}
+                      bookingUrl={tavern.bookingUrl}
+                      coordinates={tavern.coordinates}
+                      labels={{
+                        googleMapsLabel: t.matchmaker.googleMapsLabel,
+                        previewAndBookSite: t.matchmaker.previewAndBookSite,
+                        previewAndBookPlatform: t.matchmaker.previewAndBookPlatform,
+                        otherPlatformsLabel: t.matchmaker.otherPlatformsLabel,
+                        googleReviewsLabel: t.matchmaker.googleReviewsLabel,
+                        checkHotelRates: t.matchmaker.checkHotelRates,
+                        bookTicketsAndTours: t.matchmaker.bookTicketsAndTours,
+                      }}
+                    />
                   </div>
                 </div>
               </article>
@@ -912,47 +1034,55 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
                       </p>
                     </div>
 
+                    {(hotel.operatingStatus || hotel.openingHours || hotel.establishedYear) && (
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-emerald-700 dark:text-emerald-400 font-medium">
+                        {hotel.operatingStatus && (
+                          <span className="inline-flex items-center gap-1">
+                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                            <span>{hotel.operatingStatus}</span>
+                          </span>
+                        )}
+                        {hotel.establishedYear && (
+                          <span className="text-slate-500 dark:text-slate-400">
+                            · {hotel.establishedYear}
+                          </span>
+                        )}
+                        {hotel.openingHours && (
+                          <span className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-300">
+                            <Clock className="w-3 h-3 shrink-0 text-sky-600 dark:text-sky-400" />
+                            <span>{hotel.openingHours}</span>
+                          </span>
+                        )}
+                      </div>
+                    )}
+
                     {!hasImg && renderNoPhotoNotice(true, website, mapsQuery)}
 
-                    <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500 dark:text-slate-400 pt-1">
+                    <div className="flex items-center justify-between gap-3 text-xs text-slate-500 dark:text-slate-400 pt-1">
                       <span className="tabular-nums font-semibold text-slate-800 dark:text-slate-200">
-                        {hotel.priceLevel}
+                        {t.matchmaker.price}: {hotel.priceLevel}
                       </span>
-                      <div className="flex flex-wrap items-center gap-3.5 print:hidden">
-                        <a
-                          href={`https://www.booking.com/searchresults.html?ss=${encodeURIComponent(bookingQuery)}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300 font-bold hover:bg-amber-100 dark:hover:bg-amber-900/50 transition-colors"
-                        >
-                          <Building2 className="w-3.5 h-3.5 shrink-0" />
-                          <span>{t.matchmaker.checkHotelRates}</span>
-                          <ExternalLink className="w-3 h-3 shrink-0" />
-                        </a>
-                        {hasImg && website && (
-                          <a
-                            href={website}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-sky-700 dark:text-sky-400 font-semibold hover:underline"
-                          >
-                            <Globe className="w-3.5 h-3.5" />
-                            <span>{t.matchmaker.visitWebsite}</span>
-                            <ExternalLink className="w-3 h-3" />
-                          </a>
-                        )}
-                        <a
-                          href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-sky-700 dark:text-sky-400 font-semibold hover:underline"
-                        >
-                          <MapPin className="w-3.5 h-3.5" />
-                          <span>{t.matchmaker.googleMapsLabel}</span>
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      </div>
+                      <span className="truncate text-[11px]">{hotel.location}</span>
                     </div>
+
+                    <PlaceActionLinks
+                      kind="hotel"
+                      name={hotel.name}
+                      englishName={hotel.englishName}
+                      location={hotel.location}
+                      region={hotel.region}
+                      officialWebsite={website}
+                      bookingUrl={hotel.bookingUrl}
+                      labels={{
+                        googleMapsLabel: t.matchmaker.googleMapsLabel,
+                        previewAndBookSite: t.matchmaker.previewAndBookSite,
+                        previewAndBookPlatform: t.matchmaker.previewAndBookPlatform,
+                        otherPlatformsLabel: t.matchmaker.otherPlatformsLabel,
+                        googleReviewsLabel: t.matchmaker.googleReviewsLabel,
+                        checkHotelRates: t.matchmaker.checkHotelRates,
+                        bookTicketsAndTours: t.matchmaker.bookTicketsAndTours,
+                      }}
+                    />
                   </div>
                 </div>
               </article>
@@ -1061,47 +1191,144 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
                       </p>
                     </div>
 
+                    {((site.nearbyHotels && site.nearbyHotels.length > 0) ||
+                      (site.nearbyRestaurants && site.nearbyRestaurants.length > 0)) && (
+                      <div className="p-3.5 rounded-xl bg-sky-50/70 dark:bg-slate-800/90 border border-sky-200/80 dark:border-slate-700 space-y-2.5">
+                        <span className="font-bold text-sky-900 dark:text-sky-300 flex items-center gap-1.5">
+                          <Compass className="w-3.5 h-3.5 shrink-0" />
+                          <span>{t.matchmaker.aroundSiteTitle}</span>
+                        </span>
+
+                        {site.nearbyHotels && site.nearbyHotels.length > 0 && (
+                          <div className="space-y-1">
+                            <span className="font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1">
+                              <Building2 className="w-3 h-3 text-amber-600 dark:text-amber-400 shrink-0" />
+                              <span>{t.matchmaker.nearbyHotelsTitle}:</span>
+                            </span>
+                            <ul className="space-y-1 text-slate-600 dark:text-slate-300">
+                              {site.nearbyHotels.map((nh, hIdx) => (
+                                <li key={hIdx} className="flex flex-wrap items-center justify-between gap-2">
+                                  <span className="min-w-0">
+                                    <strong className="text-slate-900 dark:text-white">{nh.name}</strong>
+                                    {nh.distance ? ` (${nh.distance})` : ''}
+                                    {nh.note ? ` · ${nh.note}` : ''}
+                                  </span>
+                                  <div className="flex items-center gap-3 shrink-0 print:hidden">
+                                    <a
+                                      href={`https://www.booking.com/searchresults.html?ss=${encodeURIComponent(
+                                        `${nh.name} ${site.region} Greece`
+                                      )}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-amber-700 dark:text-amber-400 font-semibold hover:underline"
+                                    >
+                                      {t.matchmaker.previewAndBookPlatform}
+                                    </a>
+                                    <a
+                                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                                        `${nh.name} ${site.region} Greece`
+                                      )}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-sky-700 dark:text-sky-400 font-semibold hover:underline"
+                                    >
+                                      {t.matchmaker.googleMapsLabel}
+                                    </a>
+                                  </div>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        {site.nearbyRestaurants && site.nearbyRestaurants.length > 0 && (
+                          <div className="space-y-1 pt-1 border-t border-sky-200/60 dark:border-slate-700">
+                            <span className="font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1">
+                              <UtensilsCrossed className="w-3 h-3 text-sky-700 dark:text-sky-400 shrink-0" />
+                              <span>{t.matchmaker.nearbyRestaurantsTitle}:</span>
+                            </span>
+                            <ul className="space-y-1 text-slate-600 dark:text-slate-300">
+                              {site.nearbyRestaurants.map((nr, rIdx) => (
+                                <li key={rIdx} className="flex flex-wrap items-center justify-between gap-2">
+                                  <span className="min-w-0">
+                                    <strong className="text-slate-900 dark:text-white">{nr.name}</strong>
+                                    {nr.type ? ` · ${nr.type}` : ''}
+                                    {nr.distance ? ` (${nr.distance})` : ''}
+                                    {nr.specialty || nr.note ? ` — ${nr.specialty || nr.note}` : ''}
+                                  </span>
+                                  <div className="flex items-center gap-3 shrink-0 print:hidden">
+                                    <a
+                                      href={`https://www.tripadvisor.com/Search?q=${encodeURIComponent(
+                                        `${nr.name} ${site.region} Greece`
+                                      )}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-amber-700 dark:text-amber-400 font-semibold hover:underline"
+                                    >
+                                      {t.matchmaker.previewAndBookPlatform}
+                                    </a>
+                                    <a
+                                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                                        `${nr.name} ${site.region} Greece`
+                                      )}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-sky-700 dark:text-sky-400 font-semibold hover:underline"
+                                    >
+                                      {t.matchmaker.googleMapsLabel}
+                                    </a>
+                                  </div>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {(site.operatingStatus || site.openingHours) && (
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-emerald-700 dark:text-emerald-400 font-medium">
+                        {site.operatingStatus && (
+                          <span className="inline-flex items-center gap-1">
+                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                            <span>{site.operatingStatus}</span>
+                          </span>
+                        )}
+                        {site.openingHours && (
+                          <span className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-300">
+                            <Clock className="w-3 h-3 shrink-0 text-sky-600 dark:text-sky-400" />
+                            <span>{site.openingHours}</span>
+                          </span>
+                        )}
+                      </div>
+                    )}
+
                     {!hasImg && renderNoPhotoNotice(false, website, mapsQuery)}
 
-                    <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500 dark:text-slate-400 pt-1">
-                      <span className="truncate max-w-[210px]" title={site.nearbyTavernaSuggestion}>
-                        {site.nearbyTavernaSuggestion}
+                    <div className="text-xs text-slate-500 dark:text-slate-400 pt-1">
+                      <span className="truncate block" title={site.nearbyTavernaSuggestion}>
+                        <strong>{t.matchmaker.nearbyTavernaLabel}:</strong> {site.nearbyTavernaSuggestion}
                       </span>
-                      <div className="flex flex-wrap items-center gap-3.5 print:hidden">
-                        <a
-                          href={`https://www.getyourguide.com/s/?q=${encodeURIComponent(tourQuery)}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-sky-50 dark:bg-sky-950/50 border border-sky-200 dark:border-sky-800 text-sky-800 dark:text-sky-300 font-bold hover:bg-sky-100 dark:hover:bg-sky-900/50 transition-colors"
-                        >
-                          <Ticket className="w-3.5 h-3.5 shrink-0" />
-                          <span>{t.matchmaker.bookTicketsAndTours}</span>
-                          <ExternalLink className="w-3 h-3 shrink-0" />
-                        </a>
-                        {hasImg && website && (
-                          <a
-                            href={website}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-sky-700 dark:text-sky-400 font-semibold hover:underline"
-                          >
-                            <Globe className="w-3.5 h-3.5" />
-                            <span>{t.matchmaker.visitWebsite}</span>
-                            <ExternalLink className="w-3 h-3" />
-                          </a>
-                        )}
-                        <a
-                          href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-sky-700 dark:text-sky-400 font-semibold hover:underline shrink-0"
-                        >
-                          <MapPin className="w-3.5 h-3.5" />
-                          <span>{t.matchmaker.googleMapsLabel}</span>
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      </div>
                     </div>
+
+                    <PlaceActionLinks
+                      kind="site"
+                      name={site.name}
+                      englishName={site.englishName}
+                      location={site.location}
+                      region={site.region}
+                      officialWebsite={website}
+                      bookingUrl={site.bookingUrl}
+                      labels={{
+                        googleMapsLabel: t.matchmaker.googleMapsLabel,
+                        previewAndBookSite: t.matchmaker.previewAndBookSite,
+                        previewAndBookPlatform: t.matchmaker.previewAndBookPlatform,
+                        otherPlatformsLabel: t.matchmaker.otherPlatformsLabel,
+                        googleReviewsLabel: t.matchmaker.googleReviewsLabel,
+                        checkHotelRates: t.matchmaker.checkHotelRates,
+                        bookTicketsAndTours: t.matchmaker.bookTicketsAndTours,
+                      }}
+                    />
                   </div>
                 </div>
               </article>
@@ -1227,7 +1454,7 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
           </div>
         )}
 
-        {/* Primary Two Selectors: City + Preferred Food Type */}
+        {/* Primary Two Selectors: Greek Region/Prefecture + Preferred Food Type */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           <div className="space-y-2">
             <label
@@ -1240,7 +1467,10 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
             <select
               id="greek-city-select"
               value={city}
-              onChange={(e) => setCity(e.target.value)}
+              onChange={(e) => {
+                setCity(e.target.value);
+                if (customCity) setCustomCity('');
+              }}
               className="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-700 text-sm font-medium text-slate-900 dark:text-white bg-white dark:bg-slate-950 focus:outline-none focus:ring-2 focus:ring-sky-600 cursor-pointer"
             >
               {citiesList.map((c) => (
@@ -1249,6 +1479,14 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
                 </option>
               ))}
             </select>
+            <input
+              type="text"
+              value={customCity}
+              onChange={(e) => setCustomCity(e.target.value)}
+              placeholder={t.matchmaker.customCityPlaceholder}
+              aria-label={t.matchmaker.customCityLabel}
+              className="w-full px-3.5 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-600"
+            />
           </div>
 
           <div className="space-y-2">
@@ -1274,7 +1512,42 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
           </div>
         </div>
 
-        {/* Guide Focus Selector (All / Tavernas / Hotels / Archaeological Sites) */}
+        {/* Preferred Atmosphere & Style Selector (Seaside, Beach, Quiet, Romantic, Traditional, Lively, Historic) */}
+        <div className="space-y-2.5">
+          <span className="text-xs sm:text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
+            <Waves className="w-4 h-4 text-sky-700 dark:text-sky-400" />
+            <span>{t.matchmaker.atmosphereLabel}</span>
+          </span>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+            {atmospheresList.map((item) => {
+              const active = atmosphere === item.value;
+              return (
+                <button
+                  key={item.value}
+                  type="button"
+                  onClick={() => setAtmosphere(item.value)}
+                  className={`px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-colors border text-start cursor-pointer flex items-center gap-2 ${
+                    active
+                      ? 'bg-sky-700 text-white border-sky-700'
+                      : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
+                  }`}
+                >
+                  {item.value === 'any' && <Sparkles className="w-4 h-4 shrink-0" />}
+                  {item.value === 'seaside' && <Waves className="w-4 h-4 shrink-0" />}
+                  {item.value === 'beach' && <Umbrella className="w-4 h-4 shrink-0" />}
+                  {item.value === 'quiet' && <Moon className="w-4 h-4 shrink-0" />}
+                  {item.value === 'romantic' && <Sunset className="w-4 h-4 shrink-0" />}
+                  {item.value === 'traditional' && <Home className="w-4 h-4 shrink-0" />}
+                  {item.value === 'lively' && <Music className="w-4 h-4 shrink-0" />}
+                  {item.value === 'historic' && <Columns3 className="w-4 h-4 shrink-0" />}
+                  <span className="truncate">{item.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Guide Focus Selector (All / Tavernas & Bars / Hotels / Archaeological Sites) */}
         <div className="space-y-2.5">
           <span className="text-xs sm:text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
             <Compass className="w-4 h-4 text-sky-700 dark:text-sky-400" />
@@ -1379,18 +1652,38 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
                   key={item.id}
                   type="button"
                   onClick={() => {
-                    if (item.region) setCity(item.region);
+                    if (item.region) {
+                      if (CITY_KEYS.includes(item.region)) {
+                        setCity(item.region);
+                        setCustomCity('');
+                      } else {
+                        setCustomCity(item.region);
+                      }
+                    }
                     if (item.dietary) setFoodType(item.dietary);
+                    const [savedCat, savedAtmos] = String(item.mood || '').split('|');
                     if (
-                      item.mood === 'all' ||
-                      item.mood === 'tavernas' ||
-                      item.mood === 'hotels' ||
-                      item.mood === 'archaeological'
+                      savedCat === 'all' ||
+                      savedCat === 'tavernas' ||
+                      savedCat === 'hotels' ||
+                      savedCat === 'archaeological'
                     ) {
-                      setGuideCategory(item.mood);
+                      setGuideCategory(savedCat);
+                    }
+                    if (
+                      savedAtmos === 'any' ||
+                      savedAtmos === 'seaside' ||
+                      savedAtmos === 'beach' ||
+                      savedAtmos === 'quiet' ||
+                      savedAtmos === 'romantic' ||
+                      savedAtmos === 'traditional' ||
+                      savedAtmos === 'lively' ||
+                      savedAtmos === 'historic'
+                    ) {
+                      setAtmosphere(savedAtmos);
                     }
                   }}
-                  className="text-xs px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 truncate max-w-[280px] cursor-pointer"
+                  className="text-xs px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 truncate max-w-[300px] cursor-pointer"
                 >
                   {item.prompt}
                 </button>
@@ -1451,6 +1744,20 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
                   <span>{t.matchmaker.newSearch}</span>
                 </button>
               </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3 text-xs text-emerald-700 dark:text-emerald-400 font-semibold">
+              <span className="inline-flex items-center gap-1.5">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>{t.matchmaker.activeNowBadge}</span>
+              </span>
+              <span className="text-slate-300 dark:text-slate-700" aria-hidden="true">·</span>
+              <span className="inline-flex items-center gap-1.5 text-slate-600 dark:text-slate-300">
+                <Calendar className="w-3.5 h-3.5 shrink-0 text-sky-600 dark:text-sky-400" />
+                <span>
+                  {t.matchmaker.verifiedDateLabel}: {todayFormatted}
+                </span>
+              </span>
             </div>
 
             <p className="text-sm sm:text-base text-slate-700 dark:text-slate-200 leading-relaxed">
@@ -1660,28 +1967,52 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
 
                         {!hasImg && renderNoPhotoNotice(false, website, mapsQuery)}
 
-                        <div className="space-y-1.5 pt-2 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-300">
+                        <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-300">
+                          {(gem.operatingStatus || gem.openingHours) && (
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-emerald-700 dark:text-emerald-400 font-medium">
+                              {gem.operatingStatus && (
+                                <span className="inline-flex items-center gap-1">
+                                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                                  <span>{gem.operatingStatus}</span>
+                                </span>
+                              )}
+                              {gem.openingHours && (
+                                <span className="inline-flex items-center gap-1 text-slate-600 dark:text-slate-300">
+                                  <Clock className="w-3 h-3 shrink-0 text-sky-600 dark:text-sky-400" />
+                                  <span>{gem.openingHours}</span>
+                                </span>
+                              )}
+                            </div>
+                          )}
                           <div className="flex items-center gap-1.5">
                             <Clock className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400 shrink-0" />
                             <span>
                               <strong>{t.matchmaker.bestTime}:</strong> {gem.bestTimeToVisit}
                             </span>
                           </div>
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              <MapPin className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
-                              <span className="truncate">{gem.nearbyTavernaSuggestion}</span>
-                            </div>
-                            <a
-                              href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 text-sky-700 dark:text-sky-400 font-semibold hover:underline shrink-0 print:hidden"
-                            >
-                              <span>{t.matchmaker.googleMapsLabel}</span>
-                              <ExternalLink className="w-3 h-3" />
-                            </a>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <MapPin className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                            <span className="truncate">{gem.nearbyTavernaSuggestion}</span>
                           </div>
+
+                          <PlaceActionLinks
+                            kind="gem"
+                            name={gem.title}
+                            englishName={gem.englishName}
+                            location={gem.region}
+                            region={gem.region}
+                            officialWebsite={website}
+                            bookingUrl={gem.bookingUrl}
+                            labels={{
+                              googleMapsLabel: t.matchmaker.googleMapsLabel,
+                              previewAndBookSite: t.matchmaker.previewAndBookSite,
+                              previewAndBookPlatform: t.matchmaker.previewAndBookPlatform,
+                              otherPlatformsLabel: t.matchmaker.otherPlatformsLabel,
+                              googleReviewsLabel: t.matchmaker.googleReviewsLabel,
+                              checkHotelRates: t.matchmaker.checkHotelRates,
+                              bookTicketsAndTours: t.matchmaker.bookTicketsAndTours,
+                            }}
+                          />
                         </div>
                       </div>
                     </article>

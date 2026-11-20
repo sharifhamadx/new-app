@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Language, TavernaRecommendation } from '../types';
-import { curatedTavernas } from '../data/greekCuratedData';
+import { curatedTavernas, curatedTavernasAr } from '../data/greekCuratedData';
 import { translatePayloadViaServer, useUiTranslation } from '../hooks/useTranslatedContent';
-import { MapPin, Star, ExternalLink, Loader2 } from 'lucide-react';
+import { PlaceActionLinks } from './PlaceActionLinks';
+import { Star, Loader2, CheckCircle2 } from 'lucide-react';
 
 interface ExploreViewProps {
   currentLang: Language;
@@ -15,8 +16,15 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ currentLang }) => {
   const { t } = useUiTranslation(currentLang);
 
   useEffect(() => {
-    if (currentLang.toLowerCase() === 'en') {
+    const norm = currentLang.trim().toLowerCase();
+    if (norm === 'en' || norm === 'english') {
       setLocalizedTavernas(curatedTavernas);
+      setIsTranslating(false);
+      return;
+    }
+
+    if (norm === 'ar' || norm === 'arabic') {
+      setLocalizedTavernas(curatedTavernasAr);
       setIsTranslating(false);
       return;
     }
@@ -28,7 +36,7 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ currentLang }) => {
       curatedTavernas,
       currentLang,
       'curated',
-      'curated_tavernas_v1',
+      'curated_tavernas_v2',
       controller.signal
     )
       .then((translated) => {
@@ -161,19 +169,33 @@ export const ExploreView: React.FC<ExploreViewProps> = ({ currentLang }) => {
 
                 <div className="flex items-center justify-between pt-1 text-xs text-slate-500 dark:text-slate-400">
                   <span className="tabular-nums font-semibold text-slate-900 dark:text-white">
-                    {tavern.priceLevel}
+                    {t.matchmaker.price}: {tavern.priceLevel}
                   </span>
-                  <a
-                    href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${tavern.name} ${tavern.location}`)}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-1 text-sky-700 dark:text-sky-400 font-semibold hover:underline"
-                  >
-                    <MapPin className="w-3.5 h-3.5" />
-                    <span>{t.matchmaker.googleMapsLabel}</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
+                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">
+                    <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                    <span>{tavern.operatingStatus || t.matchmaker.activeNowBadge}</span>
+                  </span>
                 </div>
+
+                <PlaceActionLinks
+                  kind="taverna"
+                  name={tavern.name}
+                  englishName={tavern.englishName}
+                  location={tavern.location}
+                  region={tavern.region}
+                  officialWebsite={tavern.officialWebsite}
+                  bookingUrl={tavern.bookingUrl}
+                  coordinates={tavern.coordinates}
+                  labels={{
+                    googleMapsLabel: t.matchmaker.googleMapsLabel,
+                    previewAndBookSite: t.matchmaker.previewAndBookSite,
+                    previewAndBookPlatform: t.matchmaker.previewAndBookPlatform,
+                    otherPlatformsLabel: t.matchmaker.otherPlatformsLabel,
+                    googleReviewsLabel: t.matchmaker.googleReviewsLabel,
+                    checkHotelRates: t.matchmaker.checkHotelRates,
+                    bookTicketsAndTours: t.matchmaker.bookTicketsAndTours,
+                  }}
+                />
               </div>
             </div>
           </article>
