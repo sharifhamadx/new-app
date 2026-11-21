@@ -70,6 +70,10 @@ export interface HotelRecommendation {
   officialWebsite?: string;
   bookingUrl?: string;
   imageUrl?: string;
+  coordinates?: {
+    lat: number;
+    lng: number;
+  };
 }
 
 export interface NearbyPlaceRef {
@@ -101,6 +105,10 @@ export interface ArchaeologicalSite {
   officialWebsite?: string;
   bookingUrl?: string;
   imageUrl?: string;
+  coordinates?: {
+    lat: number;
+    lng: number;
+  };
 }
 
 export interface DishRecommendation {
@@ -134,6 +142,10 @@ export interface HiddenGemSpot {
   officialWebsite?: string;
   bookingUrl?: string;
   imageUrl?: string;
+  coordinates?: {
+    lat: number;
+    lng: number;
+  };
 }
 
 export interface LocalPhrase {
@@ -177,6 +189,25 @@ export interface TripItinerary {
   headline: string;
   days: ItineraryDay[];
   budgetSummary: string;
+}
+
+export interface CityLiveConditions {
+  city: string;
+  lat: number;
+  lng: number;
+  temperatureC: number;
+  feelsLikeC: number;
+  windKmh: number;
+  weatherCode: number;
+  tempMaxC: number;
+  tempMinC: number;
+  sunrise: string;
+  sunset: string;
+  uvIndexMax: number;
+  isIslandOrCoast: boolean;
+  ferryUrl: string;
+  officialTicketsUrl: string;
+  fetchedAt: string;
 }
 
 export interface SearchHistoryRecord {

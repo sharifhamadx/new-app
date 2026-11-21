@@ -18,3 +18,8 @@ body {
 .font-editorial {
   font-family: 'Playfair Display', Georgia, serif;
 }
+
+.leaflet-container {
+  z-index: 0 !important;
+  font-family: var(--font-sans);
+}
