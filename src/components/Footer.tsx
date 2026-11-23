@@ -17,6 +17,16 @@ export const Footer: React.FC<FooterProps> = ({
 }) => {
   const { t } = useUiTranslation(currentLang);
 
+  const goToSecureContact = () => {
+    onTabChange('about');
+    window.setTimeout(() => {
+      const formEl = document.getElementById('direct-contact-form');
+      if (formEl) {
+        formEl.scrollIntoView({ behavior: 'smooth' });
+      }
+    }, 120);
+  };
+
   return (
     <footer className="bg-slate-900 text-slate-400 border-t border-slate-800 text-xs print:hidden">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-8">
@@ -62,13 +72,14 @@ export const Footer: React.FC<FooterProps> = ({
               <span>{t.footer.legalLink}</span>
             </button>
 
-            <a
-              href={`mailto:${t.footer.contactEmail}`}
-              className="hover:text-white transition-colors flex items-center gap-1.5 text-sky-400 font-bold"
+            <button
+              type="button"
+              onClick={goToSecureContact}
+              className="hover:text-white transition-colors flex items-center gap-1.5 text-sky-400 font-bold cursor-pointer"
             >
               <Mail className="w-3.5 h-3.5" />
               <span>{t.footer.contactEmail}</span>
-            </a>
+            </button>
           </div>
 
           {/* Language Switcher */}
@@ -97,9 +108,13 @@ export const Footer: React.FC<FooterProps> = ({
             <p className="font-semibold text-slate-300">{t.footer.developedBy}</p>
             <p className="mt-1">
               {t.footer.officialContactLabel}:{' '}
-              <a href="mailto:sharifhamadmoko@gmail.com" className="text-sky-400 hover:underline">
-                sharifhamadmoko@gmail.com
-              </a>
+              <button
+                type="button"
+                onClick={goToSecureContact}
+                className="text-sky-400 hover:underline font-semibold cursor-pointer"
+              >
+                {t.footer.contactEmail}
+              </button>
             </p>
           </div>
 

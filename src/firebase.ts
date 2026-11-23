@@ -69,23 +69,12 @@ export function handleFirestoreError(
   throw new Error(JSON.stringify(errInfo));
 }
 
-export const ADMIN_EMAILS = [
-  'sharifhamadx122@gmail.com',
-  'sharifhamadmoko@gmail.com',
-];
-
-export function isAdminEmail(email?: string | null): boolean {
-  if (!email) return false;
-  return ADMIN_EMAILS.includes(email.trim().toLowerCase());
-}
-
 export async function syncSignedInUserProfile(fbUser: FirebaseUser): Promise<void> {
   if (!fbUser.email) {
     throw new Error('Google account email is missing.');
   }
 
   const cleanEmail = fbUser.email.trim().toLowerCase();
-  const admin = isAdminEmail(cleanEmail);
   const userRef = doc(db, 'users', fbUser.uid);
 
   let existingSnap;
@@ -105,9 +94,9 @@ export async function syncSignedInUserProfile(fbUser: FirebaseUser): Promise<voi
         email: cleanEmail,
         displayName,
         photoURL,
-        searchesRemaining: admin ? 999999 : 2,
-        isPremium: admin,
-        subscriptionPlan: admin ? 'annual' : 'free',
+        searchesRemaining: 2,
+        isPremium: false,
+        subscriptionPlan: 'free',
         termsAccepted: true,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -121,13 +110,6 @@ export async function syncSignedInUserProfile(fbUser: FirebaseUser): Promise<voi
         displayName,
         photoURL,
         termsAccepted: true,
-        ...(admin
-          ? {
-              isPremium: true,
-              subscriptionPlan: 'annual',
-              searchesRemaining: 999999,
-            }
-          : {}),
         updatedAt: serverTimestamp(),
       });
     } catch (err) {

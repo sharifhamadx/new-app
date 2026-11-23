@@ -204,49 +204,77 @@ export const Navbar: React.FC<NavbarProps> = ({
               )}
             </div>
 
-            {/* Auth CTA / User Account */}
+            {/* Auth CTA / Session Status */}
             {!authReady ? (
               <div className="w-24 h-9 rounded-lg bg-slate-100 dark:bg-slate-800" />
             ) : user ? (
-              <div className="relative">
+              <div className="relative flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => setUserMenuOpen(!userMenuOpen)}
-                  className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 transition-colors cursor-pointer"
+                  className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 transition-colors cursor-pointer"
                 >
-                  <img
-                    src={user.avatar}
-                    alt={user.name}
-                    referrerPolicy="no-referrer"
-                    className="w-7 h-7 rounded-full object-cover"
-                  />
+                  <div className="w-7 h-7 rounded-full bg-sky-700 text-white flex items-center justify-center shrink-0">
+                    {user.isAdmin ? (
+                      <Shield className="w-3.5 h-3.5" />
+                    ) : user.isPremium ? (
+                      <Crown className="w-3.5 h-3.5 text-amber-300" />
+                    ) : (
+                      <MonitorSmartphone className="w-3.5 h-3.5" />
+                    )}
+                  </div>
                   <div className="text-start hidden sm:block">
-                    <p className="text-xs font-semibold text-slate-900 dark:text-white leading-tight truncate max-w-[110px]">
-                      {user.name}
+                    <p className="text-xs font-semibold text-slate-900 dark:text-white leading-tight truncate max-w-[115px]">
+                      {user.isAdmin
+                        ? t.monetization.adminRoleLabel
+                        : user.isPremium
+                        ? t.monetization.vipUnlimitedLabel
+                        : t.monetization.freeTrialLabel}
                     </p>
                     <p className="text-[11px] text-slate-500 dark:text-slate-400 tabular-nums leading-tight">
                       {user.isAdmin
-                        ? t.monetization.adminUnlimitedLabel
+                        ? t.monetization.unlimitedValue || '∞'
                         : user.isPremium
-                        ? t.monetization.vipUnlimitedLabel
+                        ? t.monetization.activePlan
                         : `${user.searchesRemaining}/2`}
                     </p>
                   </div>
                 </button>
 
+                {!user.isPremium && !user.isAdmin && (
+                  <button
+                    type="button"
+                    onClick={onOpenSignIn}
+                    className="hidden md:inline-flex items-center gap-1.5 px-3 py-1.5 bg-sky-700 hover:bg-sky-800 text-white rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 transition-colors cursor-pointer"
+                  >
+                    <Crown className="w-3.5 h-3.5 text-amber-300" />
+                    <span>{t.auth.signInWithGoogle}</span>
+                  </button>
+                )}
+
                 {userMenuOpen && (
                   <div
-                    className="absolute right-0 mt-2 w-72 bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-800 p-4 z-50 space-y-3"
+                    className="absolute right-0 top-full mt-2 w-72 bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-800 p-4 z-50 space-y-3"
                     onMouseLeave={() => setUserMenuOpen(false)}
                   >
                     <div className="border-b border-slate-100 dark:border-slate-800 pb-3">
                       <p className="text-[11px] text-slate-400">{t.auth.signedInAs}</p>
-                      <p className="text-sm font-bold text-slate-900 dark:text-white truncate">{user.name}</p>
-                      <p className="text-xs text-slate-500 dark:text-slate-400 truncate">{user.email}</p>
+                      <p className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                        {user.isAdmin
+                          ? t.monetization.adminRoleLabel
+                          : user.isPremium
+                          ? t.monetization.vipPassBadge
+                          : t.auth.guestExplorerName || 'Guest Explorer'}
+                      </p>
+                      {user.codeHint && (
+                        <p className="text-xs font-mono text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                          {user.codeHint}
+                        </p>
+                      )}
 
                       <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-600 dark:text-slate-300">
                         <MonitorSmartphone className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400 shrink-0" />
-                        <span>{t.navbar.syncedDevicesLabel}</span>
+                        <span>{t.auth.guestBannerNotice || t.navbar.syncedDevicesLabel}</span>
                       </div>
                     </div>
 
@@ -296,21 +324,33 @@ export const Navbar: React.FC<NavbarProps> = ({
                             <Crown className="w-3.5 h-3.5 shrink-0" />
                             <span className="truncate">{t.monetization.upgradeButton}</span>
                           </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setUserMenuOpen(false);
+                              onOpenSignIn();
+                            }}
+                            className="w-full py-2 px-3 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-900 dark:text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                          >
+                            <span>{t.auth.enterActivationCode}</span>
+                          </button>
                         </>
                       )}
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setUserMenuOpen(false);
-                        onSignOut();
-                      }}
-                      className="w-full flex items-center gap-2 py-2 px-2 text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition-colors cursor-pointer"
-                    >
-                      <LogOut className="w-3.5 h-3.5" />
-                      <span>{t.auth.signOut}</span>
-                    </button>
+                    {(user.isPremium || user.isAdmin) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUserMenuOpen(false);
+                          onSignOut();
+                        }}
+                        className="w-full flex items-center gap-2 py-2 px-2 text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition-colors cursor-pointer"
+                      >
+                        <LogOut className="w-3.5 h-3.5" />
+                        <span>{t.auth.signOut}</span>
+                      </button>
+                    )}
                   </div>
                 )}
               </div>

@@ -1,29 +1,15 @@
 import { useState, useEffect, useCallback } from 'react';
-import { onAuthStateChanged, signOut, signInWithCredential, GoogleAuthProvider } from 'firebase/auth';
-import { Capacitor } from '@capacitor/core';
-import { App as CapApp } from '@capacitor/app';
-import { Browser } from '@capacitor/browser';
-import {
-  collection,
-  doc,
-  onSnapshot,
-  updateDoc,
-  setDoc,
-  deleteDoc,
-  serverTimestamp,
-  query,
-  where,
-  limit,
-} from 'firebase/firestore';
-import { auth, db, isAdminEmail, handleFirestoreError, OperationType, syncSignedInUserProfile } from './firebase';
 import {
   Language,
   User,
   ActiveTab,
   Theme,
-  SubscriptionPlan,
   FavoriteItem,
 } from './types';
+import {
+  fetchSessionState,
+  signOutSession,
+} from './utils/sessionClient';
 import { Navbar } from './components/Navbar';
 import { MatchmakerView } from './components/MatchmakerView';
 import { LiveTranslatorView } from './components/LiveTranslatorView';
@@ -38,7 +24,10 @@ import { TermsModal } from './components/TermsModal';
 import { PremiumModal } from './components/PremiumModal';
 import { Footer } from './components/Footer';
 import { OfflineIndicator } from './components/PWAInstallBanner';
+import { FloatingWhatsAppButton } from './components/FloatingWhatsAppButton';
 import { isRtlLanguage, useUiTranslation } from './hooks/useTranslatedContent';
+
+const FAVORITES_STORAGE_KEY = 'aegea_favorites_v2';
 
 function makeFavoriteDocId(itemType: string, nameKey: string): string {
   const safe = `${itemType}_${nameKey}`
@@ -47,6 +36,19 @@ function makeFavoriteDocId(itemType: string, nameKey: string): string {
     .replace(/^_+|_+$/g, '')
     .slice(0, 96);
   return safe || `${itemType}_${Date.now()}`;
+}
+
+function loadStoredFavorites(): FavoriteItem[] {
+  try {
+    const raw = localStorage.getItem(FAVORITES_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    }
+  } catch {
+    // ignore storage read errors
+  }
+  return [];
 }
 
 export default function App() {
@@ -65,10 +67,12 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('matchmaker');
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
+  const [adminSetupRequired, setAdminSetupRequired] = useState(false);
 
-  const [favorites, setFavorites] = useState<FavoriteItem[]>([]);
+  const [favorites, setFavorites] = useState<FavoriteItem[]>(() => loadStoredFavorites());
 
   const [isSignInOpen, setIsSignInOpen] = useState(false);
+  const [signInInitialTab, setSignInInitialTab] = useState<'vip' | 'admin'>('vip');
   const [isTermsOpen, setIsTermsOpen] = useState(false);
   const [isPremiumOpen, setIsPremiumOpen] = useState(false);
 
@@ -91,242 +95,112 @@ export default function App() {
     document.documentElement.dir = isRtlLanguage(currentLang) ? 'rtl' : 'ltr';
   }, [currentLang]);
 
-  // Real Firebase Auth + Firestore real-time user + favorites listener across all devices
+  // Persist favorites cleanly on device
   useEffect(() => {
-    let unsubUserDoc: (() => void) | null = null;
-    let unsubFavorites: (() => void) | null = null;
+    try {
+      localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(favorites));
+    } catch {
+      // ignore quota errors
+    }
+  }, [favorites]);
 
-    const unsubAuth = onAuthStateChanged(auth, async (fbUser) => {
-      if (unsubUserDoc) {
-        unsubUserDoc();
-        unsubUserDoc = null;
-      }
-      if (unsubFavorites) {
-        unsubFavorites();
-        unsubFavorites = null;
-      }
-
-      if (!fbUser || !fbUser.email) {
-        setUser(null);
-        setFavorites([]);
-        setAuthReady(true);
-        return;
-      }
-
-      const cleanEmail = fbUser.email.trim().toLowerCase();
-      const admin = isAdminEmail(cleanEmail);
-      const userRef = doc(db, 'users', fbUser.uid);
-
-      // Hydrate offline favorites cache immediately
+  // Initialize server-verified Guest Trial or restored VIP/Admin session without requiring Google login
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
       try {
-        const offlineFavs = localStorage.getItem(`aegea_favorites_offline_${fbUser.uid}`);
-        if (offlineFavs) {
-          setFavorites(JSON.parse(offlineFavs));
+        const session = await fetchSessionState();
+        if (!cancelled) {
+          setUser(session.user);
+          setAdminSetupRequired(session.adminSetupRequired);
         }
       } catch {
-        // ignore storage errors
+        if (!cancelled) {
+          setUser({
+            uid: 'guest_offline',
+            name: 'Guest Explorer',
+            email: '',
+            avatar: '',
+            searchesRemaining: 2,
+            isPremium: false,
+            termsAccepted: false,
+            isAdmin: false,
+            isGuest: true,
+            subscriptionPlan: 'free',
+          });
+        }
+      } finally {
+        if (!cancelled) {
+          setAuthReady(true);
+        }
       }
-
-      unsubUserDoc = onSnapshot(
-        userRef,
-        async (snap) => {
-          if (snap.exists()) {
-            const data = snap.data();
-            if (
-              admin &&
-              (!data.isPremium ||
-                data.subscriptionPlan !== 'annual' ||
-                Number(data.searchesRemaining ?? 0) < 999999)
-            ) {
-              updateDoc(userRef, {
-                isPremium: true,
-                subscriptionPlan: 'annual',
-                searchesRemaining: 999999,
-                updatedAt: serverTimestamp(),
-              }).catch(() => {});
-            }
-            setUser({
-              uid: fbUser.uid,
-              name: data.displayName || fbUser.displayName || cleanEmail.split('@')[0],
-              email: data.email || cleanEmail,
-              avatar:
-                data.photoURL ||
-                fbUser.photoURL ||
-                `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(cleanEmail)}&backgroundColor=0284c7`,
-              searchesRemaining: admin ? 999999 : Number(data.searchesRemaining ?? 2),
-              isPremium: admin ? true : Boolean(data.isPremium),
-              termsAccepted: Boolean(data.termsAccepted),
-              isAdmin: admin,
-              subscriptionPlan: admin ? 'annual' : data.subscriptionPlan || 'free',
-            });
-            setAuthReady(true);
-          } else if (!snap.metadata.fromCache) {
-            try {
-              await syncSignedInUserProfile(fbUser);
-            } catch (err) {
-              console.error('Failed to sync signed-in profile:', err);
-              setAuthReady(true);
-            }
-          }
-        },
-        (error) => {
-          handleFirestoreError(error, OperationType.GET, `users/${fbUser.uid}`);
-        }
-      );
-
-      // Sync user's Saved Trip Favorites from Firestore + persist offline
-      const favsPath = `users/${fbUser.uid}/favorites`;
-      unsubFavorites = onSnapshot(
-        query(collection(db, favsPath), where('userId', '==', fbUser.uid), limit(100)),
-        (snap) => {
-          const list = snap.docs
-            .map((d) => ({ ...(d.data() as FavoriteItem), id: d.id }))
-            .sort((a: any, b: any) => (b?.createdAt?.seconds ?? 0) - (a?.createdAt?.seconds ?? 0));
-          setFavorites(list);
-          try {
-            localStorage.setItem(`aegea_favorites_offline_${fbUser.uid}`, JSON.stringify(list));
-          } catch {
-            // ignore quota errors
-          }
-        },
-        (err) => {
-          handleFirestoreError(err, OperationType.LIST, favsPath);
-        }
-      );
-    });
+    })();
 
     return () => {
-      unsubAuth();
-      if (unsubUserDoc) unsubUserDoc();
-      if (unsubFavorites) unsubFavorites();
+      cancelled = true;
     };
   }, []);
 
-  // Handle Chrome Custom Tab -> com.aegea.smartguide://auth deep-link callback inside Android APK
-  useEffect(() => {
-    if (!Capacitor.isNativePlatform()) return;
-    let handlePromise = CapApp.addListener('appUrlOpen', async ({ url }) => {
-      if (!url || !url.startsWith('com.aegea.smartguide://auth')) return;
-      try {
-        await Browser.close().catch(() => {});
-        const parsed = new URL(url);
-        const idToken = parsed.searchParams.get('idToken') || '';
-        const accessToken = parsed.searchParams.get('accessToken') || '';
-        if (!idToken && !accessToken) {
-          window.dispatchEvent(
-            new CustomEvent('aegea:mobile-auth-error', {
-              detail: 'Missing Google authentication token.',
-            })
-          );
-          return;
-        }
-        const credential = GoogleAuthProvider.credential(idToken || null, accessToken || null);
-        const res = await signInWithCredential(auth, credential);
-        await syncSignedInUserProfile(res.user);
-        setIsSignInOpen(false);
-        window.dispatchEvent(new CustomEvent('aegea:mobile-auth-complete'));
-      } catch (err: any) {
-        console.error('Native mobile auth callback error:', err);
-        window.dispatchEvent(
-          new CustomEvent('aegea:mobile-auth-error', {
-            detail: err?.message || 'Could not complete mobile Google Sign-In.',
-          })
-        );
-      }
-    });
-
-    return () => {
-      handlePromise.then((h) => h.remove()).catch(() => {});
-    };
+  const handleSessionUpdated = useCallback((nextUser: User, nextAdminSetup: boolean) => {
+    setUser(nextUser);
+    setAdminSetupRequired(nextAdminSetup);
   }, []);
 
   const handleSignOut = async () => {
-    await signOut(auth);
-    setUser(null);
-    setFavorites([]);
+    try {
+      const res = await signOutSession();
+      setUser(res.user);
+      setAdminSetupRequired(res.adminSetupRequired);
+    } catch {
+      // ignore signout network errors
+    }
   };
 
   const handleToggleTheme = () => {
     setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
   };
 
-  const handleDecrementSearch = async () => {
-    if (!user || user.isPremium || user.isAdmin) return;
-    const nextCount = Math.max(0, user.searchesRemaining - 1);
-    const userRef = doc(db, 'users', user.uid);
-    try {
-      await updateDoc(userRef, {
-        searchesRemaining: nextCount,
-        updatedAt: serverTimestamp(),
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}`);
-    }
+  const handleOpenVipModal = () => {
+    setSignInInitialTab('vip');
+    setIsSignInOpen(true);
   };
 
-  const handleUpgradeSuccess = async (plan: SubscriptionPlan) => {
-    if (!user) return;
-    const userRef = doc(db, 'users', user.uid);
-    try {
-      await updateDoc(userRef, {
-        isPremium: true,
-        subscriptionPlan: plan,
-        searchesRemaining: 999999,
-        updatedAt: serverTimestamp(),
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `users/${user.uid}`);
-    }
+  const handleOpenAdminModal = () => {
+    setSignInInitialTab('admin');
+    setIsSignInOpen(true);
   };
 
   const handleToggleFavorite = useCallback(
     async (item: Omit<FavoriteItem, 'id' | 'userId' | 'createdAt'>) => {
-      if (!user || !auth.currentUser) {
-        setIsSignInOpen(true);
-        return;
-      }
       const favId = makeFavoriteDocId(item.itemType, item.englishName || item.name);
-      const favPath = `users/${user.uid}/favorites/${favId}`;
-      const existing = favorites.find((f) => f.id === favId);
-
-      try {
-        if (existing) {
-          await deleteDoc(doc(db, favPath));
-        } else {
-          await setDoc(doc(db, favPath), {
-            id: favId,
-            userId: user.uid,
-            itemType: item.itemType,
-            name: String(item.name || '').slice(0, 200),
-            englishName: String(item.englishName || item.name || '').slice(0, 200),
-            greekName: String(item.greekName || '').slice(0, 200),
-            region: String(item.region || '').slice(0, 120),
-            description: String(item.description || '').slice(0, 1500),
-            officialWebsite: String(item.officialWebsite || '').slice(0, 400),
-            imageUrl: String(item.imageUrl || '').slice(0, 600),
-            priceLevel: String(item.priceLevel || '').slice(0, 20),
-            createdAt: serverTimestamp(),
-          });
+      setFavorites((prev) => {
+        const exists = prev.some((f) => f.id === favId);
+        if (exists) {
+          return prev.filter((f) => f.id !== favId);
         }
-      } catch (err) {
-        handleFirestoreError(err, existing ? OperationType.DELETE : OperationType.CREATE, favPath);
-      }
+        const entry: FavoriteItem = {
+          id: favId,
+          userId: user?.uid || 'guest',
+          itemType: item.itemType,
+          name: String(item.name || '').slice(0, 200),
+          englishName: String(item.englishName || item.name || '').slice(0, 200),
+          greekName: String(item.greekName || '').slice(0, 200),
+          region: String(item.region || '').slice(0, 120),
+          description: String(item.description || '').slice(0, 1500),
+          officialWebsite: String(item.officialWebsite || '').slice(0, 400),
+          imageUrl: String(item.imageUrl || '').slice(0, 600),
+          priceLevel: String(item.priceLevel || '').slice(0, 20),
+          createdAt: Date.now(),
+        };
+        return [entry, ...prev].slice(0, 100);
+      });
     },
-    [user, favorites]
+    [user?.uid]
   );
 
-  const handleRemoveFavorite = useCallback(
-    async (favId: string) => {
-      if (!user) return;
-      const favPath = `users/${user.uid}/favorites/${favId}`;
-      try {
-        await deleteDoc(doc(db, favPath));
-      } catch (err) {
-        handleFirestoreError(err, OperationType.DELETE, favPath);
-      }
-    },
-    [user]
-  );
+  const handleRemoveFavorite = useCallback(async (favId: string) => {
+    setFavorites((prev) => prev.filter((f) => f.id !== favId));
+  }, []);
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 selection:bg-sky-600 selection:text-white transition-colors duration-200">
@@ -335,7 +209,7 @@ export default function App() {
         onLanguageChange={setCurrentLang}
         user={user}
         authReady={authReady}
-        onOpenSignIn={() => setIsSignInOpen(true)}
+        onOpenSignIn={handleOpenVipModal}
         onSignOut={handleSignOut}
         onOpenPremium={() => setIsPremiumOpen(true)}
         activeTab={activeTab}
@@ -352,7 +226,7 @@ export default function App() {
             user={user}
             favorites={favorites}
             onToggleFavorite={handleToggleFavorite}
-            onOpenSignIn={() => setIsSignInOpen(true)}
+            onOpenSignIn={handleOpenVipModal}
             onOpenPremium={() => setIsPremiumOpen(true)}
             onOpenPartner={() => {
               setActiveTab('about');
@@ -362,7 +236,7 @@ export default function App() {
               setActiveTab('translator');
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
-            onDecrementSearch={handleDecrementSearch}
+            onSyncUser={(updatedUser) => setUser(updatedUser)}
           />
         )}
 
@@ -380,7 +254,7 @@ export default function App() {
             user={user}
             favorites={favorites}
             onRemoveFavorite={handleRemoveFavorite}
-            onOpenSignIn={() => setIsSignInOpen(true)}
+            onOpenSignIn={handleOpenVipModal}
             onGoToMatchmaker={() => setActiveTab('matchmaker')}
           />
         )}
@@ -389,6 +263,7 @@ export default function App() {
           <AboutDeveloperView
             currentLang={currentLang}
             user={user}
+            onOpenAdminLogin={handleOpenAdminModal}
           />
         )}
 
@@ -401,6 +276,8 @@ export default function App() {
         onTabChange={setActiveTab}
       />
 
+      <FloatingWhatsAppButton currentLang={currentLang} />
+
       <OfflineIndicator currentLang={currentLang} />
 
       <GoogleSignInModal
@@ -408,6 +285,9 @@ export default function App() {
         onClose={() => setIsSignInOpen(false)}
         onOpenTerms={() => setIsTermsOpen(true)}
         currentLang={currentLang}
+        initialTab={signInInitialTab}
+        adminSetupRequired={adminSetupRequired}
+        onSessionUpdated={handleSessionUpdated}
       />
 
       <TermsModal
@@ -420,7 +300,8 @@ export default function App() {
         isOpen={isPremiumOpen}
         onClose={() => setIsPremiumOpen(false)}
         user={user}
-        onUpgradeSuccess={handleUpgradeSuccess}
+        onSessionUpdated={handleSessionUpdated}
+        onOpenTerms={() => setIsTermsOpen(true)}
         currentLang={currentLang}
       />
     </div>

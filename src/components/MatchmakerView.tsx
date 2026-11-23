@@ -1,15 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import {
-  collection,
-  doc,
-  setDoc,
-  query,
-  where,
-  limit,
-  onSnapshot,
-  serverTimestamp,
-} from 'firebase/firestore';
-import { auth, db, handleFirestoreError, OperationType } from '../firebase';
+import { apiFetch, setInMemorySessionToken } from '../utils/sessionClient';
 import {
   Language,
   User,
@@ -99,10 +89,12 @@ interface MatchmakerViewProps {
   onOpenPremium: () => void;
   onOpenPartner?: () => void;
   onOpenTranslator?: () => void;
-  onDecrementSearch: () => Promise<void>;
+  onSyncUser: (user: User) => void;
   favorites?: FavoriteItem[];
   onToggleFavorite?: (item: Omit<FavoriteItem, 'id' | 'userId' | 'createdAt'>) => Promise<void>;
 }
+
+const RECENT_SEARCHES_STORAGE_KEY = 'aegea_recent_searches_v2';
 
 const HERO_IMAGE = IMG_HERO_AEGEAN;
 
@@ -203,7 +195,7 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
   onOpenPremium,
   onOpenPartner,
   onOpenTranslator,
-  onDecrementSearch,
+  onSyncUser,
   favorites = [],
   onToggleFavorite,
 }) => {
@@ -375,43 +367,22 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
     }
   }, []);
 
-  // Load user's real search history from Firestore across all devices
+  // Load saved local search history on mount & when admin status changes
   useEffect(() => {
-    if (!user?.uid || !auth.currentUser) {
-      setRecentSearches([]);
-      return;
-    }
-
-    const searchesPath = `users/${user.uid}/searches`;
-    const q = query(
-      collection(db, searchesPath),
-      where('userId', '==', user.uid),
-      limit(50)
-    );
-
-    const unsub = onSnapshot(
-      q,
-      (snapshot) => {
-        const items: SearchHistoryRecord[] = snapshot.docs
-          .map((d) => ({
-            ...(d.data() as SearchHistoryRecord),
-            id: d.id,
-          }))
-          .sort((a: any, b: any) => {
-            const aSec = a?.createdAt?.seconds ?? 0;
-            const bSec = b?.createdAt?.seconds ?? 0;
-            return bSec - aSec;
-          })
-          .slice(0, user.isAdmin ? 20 : 5);
-        setRecentSearches(items);
-      },
-      (err) => {
-        handleFirestoreError(err, OperationType.LIST, searchesPath);
+    try {
+      const raw = localStorage.getItem(RECENT_SEARCHES_STORAGE_KEY);
+      if (!raw) {
+        setRecentSearches([]);
+        return;
       }
-    );
-
-    return () => unsub();
-  }, [user?.uid, user?.isAdmin]);
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        setRecentSearches(parsed.slice(0, user?.isAdmin ? 20 : 5));
+      }
+    } catch {
+      setRecentSearches([]);
+    }
+  }, [user?.isAdmin]);
 
   // Automatically translate live search results whenever user switches to ANY language (zero quota used)
   useEffect(() => {
@@ -535,12 +506,7 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
   };
 
   const handleSearch = async () => {
-    if (!user || !auth.currentUser) {
-      onOpenSignIn();
-      return;
-    }
-
-    if (!user.isAdmin && !user.isPremium && user.searchesRemaining <= 0) {
+    if (user && !user.isAdmin && !user.isPremium && user.searchesRemaining <= 0) {
       onOpenPremium();
       return;
     }
@@ -565,7 +531,6 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
     itineraryCacheRef.current = {};
 
     try {
-      const idToken = await auth.currentUser.getIdToken();
       const requestBody = JSON.stringify({
         city: effectiveCity,
         foodType: selectedFoodObj.label,
@@ -580,12 +545,10 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
         const controller = new AbortController();
         const timeoutId = window.setTimeout(() => controller.abort(), 36000);
         try {
-          const res = await fetch(apiUrl('/api/recommend'), {
+          const res = await apiFetch('/api/recommend', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              Accept: 'application/json',
-              Authorization: `Bearer ${idToken}`,
             },
             body: requestBody,
             signal: controller.signal,
@@ -639,9 +602,19 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
       }
 
       if (!response || !response.ok) {
+        if (response?.status === 403 && data?.codeRequired) {
+          onOpenPremium();
+        }
         const rawErr = String(data.error || '');
         const cleanErr = rawErr && !rawErr.includes('{') ? rawErr : t.matchmaker.searchFailedError;
         throw new Error(cleanErr);
+      }
+
+      if (data?.sessionMeta?.sessionToken) {
+        setInMemorySessionToken(data.sessionMeta.sessionToken);
+      }
+      if (data?.sessionMeta?.user) {
+        onSyncUser(data.sessionMeta.user);
       }
 
       // Keep only verified real photos resolved by the backend (never inject static stock placeholders)
@@ -668,36 +641,32 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
         // ignore storage quota errors
       }
 
-      // Decrement trial search count in Firestore
-      if (!user.isPremium && !user.isAdmin) {
-        await onDecrementSearch();
-      }
-
-      // Persist search summary in Firestore for cross-device history
       const searchId = `s_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      const searchPath = `users/${user.uid}/searches/${searchId}`;
       const historyLabel =
         atmosphere !== 'any'
           ? `${effectiveCityLabel} · ${selectedAtmosphereObj.label} · ${selectedFoodObj.label}`
           : `${effectiveCityLabel} · ${selectedFoodObj.label}`;
-      const sanitizedLang = String(currentLang || 'en').trim().slice(0, 40);
-      const safeFirestoreLang = sanitizedLang.length >= 2 ? sanitizedLang : 'en';
+      const newRecord: SearchHistoryRecord = {
+        id: searchId,
+        userId: user?.uid || 'guest',
+        prompt: historyLabel.slice(0, 1000),
+        region: effectiveCity.slice(0, 100),
+        mood: `${guideCategory}|${atmosphere}`.slice(0, 100),
+        dietary: foodType.slice(0, 100),
+        language: String(currentLang || 'en').trim().slice(0, 40) || 'en',
+        summary: String(data.summary || '').slice(0, 4000),
+        createdAt: { seconds: Math.floor(Date.now() / 1000) },
+      };
 
-      try {
-        await setDoc(doc(db, searchPath), {
-          id: searchId,
-          userId: user.uid,
-          prompt: historyLabel.slice(0, 1000),
-          region: effectiveCity.slice(0, 100),
-          mood: `${guideCategory}|${atmosphere}`.slice(0, 100),
-          dietary: foodType.slice(0, 100),
-          language: safeFirestoreLang,
-          summary: String(data.summary || '').slice(0, 4000),
-          createdAt: serverTimestamp(),
-        });
-      } catch (err) {
-        handleFirestoreError(err, OperationType.CREATE, searchPath);
-      }
+      setRecentSearches((prev) => {
+        const updated = [newRecord, ...prev].slice(0, user?.isAdmin ? 20 : 5);
+        try {
+          localStorage.setItem(RECENT_SEARCHES_STORAGE_KEY, JSON.stringify(updated));
+        } catch {
+          // ignore quota errors
+        }
+        return updated;
+      });
 
       setTimeout(() => {
         const resultsEl = document.getElementById('matchmaker-results');
@@ -723,11 +692,7 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
   };
 
   const handleGenerateItinerary = async () => {
-    if (!user || !auth.currentUser) {
-      onOpenSignIn();
-      return;
-    }
-    if (!user.isPremium && !user.isAdmin) {
+    if (!user?.isPremium && !user?.isAdmin) {
       onOpenPremium();
       return;
     }
@@ -737,7 +702,6 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
     setItineraryError(null);
 
     try {
-      const idToken = await auth.currentUser.getIdToken();
       const selectedCityObj = citiesList.find((c) => c.value === city) || citiesList[0];
       const selectedFoodObj = foodTypesList.find((f) => f.value === foodType) || foodTypesList[0];
       const payloadBody = JSON.stringify({
@@ -751,12 +715,10 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
         const controller = new AbortController();
         const timeoutId = window.setTimeout(() => controller.abort(), 25000);
         try {
-          const res = await fetch(apiUrl('/api/itinerary'), {
+          const res = await apiFetch('/api/itinerary', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              Accept: 'application/json',
-              Authorization: `Bearer ${idToken}`,
             },
             body: payloadBody,
             signal: controller.signal,
@@ -805,11 +767,7 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
   };
 
   const handleDownloadPdf = async () => {
-    if (!user || !auth.currentUser) {
-      onOpenSignIn();
-      return;
-    }
-    if (!user.isPremium && !user.isAdmin) {
+    if (!user?.isPremium && !user?.isAdmin) {
       onOpenPremium();
       return;
     }

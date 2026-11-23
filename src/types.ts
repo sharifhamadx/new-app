@@ -21,7 +21,10 @@ export interface User {
   isPremium: boolean;
   termsAccepted: boolean;
   isAdmin?: boolean;
+  isGuest?: boolean;
   subscriptionPlan?: 'free' | SubscriptionPlan;
+  planExpiresAt?: string | null;
+  codeHint?: string | null;
 }
 
 export interface TavernaRecommendation {

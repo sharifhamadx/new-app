@@ -57,32 +57,6 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
     }
   };
 
-  if (!user) {
-    return (
-      <div className="max-w-2xl mx-auto py-16 text-center space-y-5">
-        <div className="w-14 h-14 rounded-2xl bg-sky-50 dark:bg-sky-950/60 border border-sky-200 dark:border-sky-800 mx-auto flex items-center justify-center">
-          <Heart className="w-7 h-7 text-sky-700 dark:text-sky-400" />
-        </div>
-        <div className="space-y-2">
-          <h1 className="font-editorial text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">
-            {t.favorites?.signInRequired || 'Sign In to Save Your Greece Favorites'}
-          </h1>
-          <p className="text-sm text-slate-600 dark:text-slate-300 max-w-md mx-auto leading-relaxed">
-            {t.favorites?.signInDesc ||
-              'Bookmark top tavernas, boutique hotels, and archaeological wonders synced across all your devices and available offline.'}
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={onOpenSignIn}
-          className="px-6 py-3 bg-sky-700 hover:bg-sky-800 text-white rounded-xl text-sm font-bold transition-colors cursor-pointer"
-        >
-          {t.auth.signInWithGoogle}
-        </button>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-8 pb-16">
       <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 sm:p-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">

@@ -14,9 +14,19 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+app.set('trust proxy', 1);
 const port = parseInt(process.env.PORT || '3000', 10);
 
-// Allow native Capacitor APK (https://localhost / capacitor://localhost) and Cloud Run origins to call /api/*
+// Global security headers (without X-Frame-Options so AI Studio iFrame preview renders cleanly)
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(self), microphone=(self), geolocation=(self)');
+  res.setHeader('X-DNS-Prefetch-Control', 'off');
+  next();
+});
+
+// Allow native Capacitor APK (https://localhost / capacitor://localhost), Render, and Cloud Run origins to call /api/*
 app.use('/api', (req: Request, res: Response, next: NextFunction) => {
   const origin = req.headers.origin;
   if (
@@ -25,12 +35,14 @@ app.use('/api', (req: Request, res: Response, next: NextFunction) => {
       origin === 'http://localhost' ||
       origin === 'capacitor://localhost' ||
       origin.startsWith('http://localhost:') ||
+      /^https:\/\/[a-z0-9-]+\.onrender\.com$/i.test(origin) ||
       /^https:\/\/[a-z0-9-]+\.[a-z0-9-]+\.run\.app$/i.test(origin))
   ) {
     res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Vary', 'Origin');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, X-Requested-With');
   }
   if (req.method === 'OPTIONS') {
     return res.sendStatus(204);
@@ -337,7 +349,7 @@ async function resolveVerifiedPlaceImageWithBudget(
   ]);
 }
 
-// Verify Firebase Google ID Token via Google Identity Toolkit
+// Verify Firebase Google ID Token via Google Identity Toolkit (kept solely for optional legacy mobile bridge)
 async function verifyFirebaseIdToken(idToken: string): Promise<{ uid: string; email: string; emailVerified: boolean; displayName?: string } | null> {
   if (!firebaseApiKey || !idToken) return null;
   try {
@@ -361,6 +373,835 @@ async function verifyFirebaseIdToken(idToken: string): Promise<{ uid: string; em
     console.error('Token lookup failed:', err);
     return null;
   }
+}
+
+// ============================================================================
+// Hardened Activation Code Auth, Cryptographic Sessions & Brute-Force Protection
+// ============================================================================
+const AUTH_COOKIE_NAME = 'aegea_session';
+const GUEST_FREE_SEARCH_LIMIT = 2;
+const MAX_IP_TRIALS_PER_24H = 4;
+const SESSION_SECRET = String(process.env.SESSION_SECRET || '').trim() || crypto.randomBytes(32).toString('hex');
+const CODE_PEPPER = crypto.createHmac('sha256', SESSION_SECRET).update('aegea-code-pepper-v1').digest('hex');
+
+const DATA_DIR = path.join(__dirname, 'data');
+const AUTH_STORE_FILE = path.join(DATA_DIR, 'aegea-auth-store.json');
+
+type SecurityPlan = 'weekly_pass' | 'monthly' | 'annual';
+
+interface StoredActivationCode {
+  id: string;
+  codeHash: string;
+  codePrefix: string;
+  label: string;
+  plan: SecurityPlan;
+  durationDays: number;
+  maxUses: number;
+  usesCount: number;
+  revoked: boolean;
+  createdAt: string;
+  expiresAt: string | null;
+}
+
+interface StoredContactMessage {
+  id: string;
+  name: string;
+  email: string;
+  message: string;
+  createdAt: string;
+}
+
+interface StoredPartnerInquiry {
+  id: string;
+  businessName: string;
+  businessType: string;
+  city: string;
+  contactEmail: string;
+  websiteUrl?: string;
+  notes?: string;
+  createdAt: string;
+}
+
+interface SecurityStore {
+  adminPasscodeSalt?: string;
+  adminPasscodeHash?: string;
+  codes: StoredActivationCode[];
+  trials: Record<string, { used: number; updatedAt: number }>;
+  ipTrials: Record<string, { used: number; windowStart: number }>;
+  contactMessages: StoredContactMessage[];
+  partnerInquiries: StoredPartnerInquiry[];
+}
+
+function loadSecurityStore(): SecurityStore {
+  try {
+    if (fs.existsSync(AUTH_STORE_FILE)) {
+      const raw = fs.readFileSync(AUTH_STORE_FILE, 'utf8');
+      const parsed = JSON.parse(raw);
+      return {
+        adminPasscodeSalt: parsed.adminPasscodeSalt || undefined,
+        adminPasscodeHash: parsed.adminPasscodeHash || undefined,
+        codes: Array.isArray(parsed.codes) ? parsed.codes : [],
+        trials: parsed.trials && typeof parsed.trials === 'object' ? parsed.trials : {},
+        ipTrials: parsed.ipTrials && typeof parsed.ipTrials === 'object' ? parsed.ipTrials : {},
+        contactMessages: Array.isArray(parsed.contactMessages) ? parsed.contactMessages : [],
+        partnerInquiries: Array.isArray(parsed.partnerInquiries) ? parsed.partnerInquiries : [],
+      };
+    }
+  } catch (err) {
+    console.warn('[SECURITY STORE] Initializing clean store:', (err as Error)?.message);
+  }
+  return {
+    codes: [],
+    trials: {},
+    ipTrials: {},
+    contactMessages: [],
+    partnerInquiries: [],
+  };
+}
+
+let securityStore: SecurityStore = loadSecurityStore();
+
+function persistSecurityStore() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+    }
+    // Prune stale IP trial windows (>24h) and keep maps bounded
+    const now = Date.now();
+    for (const [k, v] of Object.entries(securityStore.ipTrials)) {
+      if (now - v.windowStart > 24 * 60 * 60 * 1000) {
+        delete securityStore.ipTrials[k];
+      }
+    }
+    const trialEntries = Object.entries(securityStore.trials);
+    if (trialEntries.length > 5000) {
+      trialEntries.sort((a, b) => a[1].updatedAt - b[1].updatedAt);
+      for (let i = 0; i < trialEntries.length - 4000; i++) {
+        delete securityStore.trials[trialEntries[i][0]];
+      }
+    }
+    securityStore.contactMessages = securityStore.contactMessages.slice(0, 200);
+    securityStore.partnerInquiries = securityStore.partnerInquiries.slice(0, 200);
+    fs.writeFileSync(AUTH_STORE_FILE, JSON.stringify(securityStore, null, 2), { encoding: 'utf8', mode: 0o600 });
+  } catch (err) {
+    console.warn('[SECURITY STORE] Could not write store:', (err as Error)?.message);
+  }
+}
+
+function getClientIp(req: Request): string {
+  const ip = String(req.ip || req.socket?.remoteAddress || 'unknown').trim();
+  return ip.slice(0, 96);
+}
+
+// Sliding-window rate limiter & brute-force lockout
+const rateLimitBuckets = new Map<string, number[]>();
+
+function createRateLimiter(options: {
+  prefix: string;
+  maxRequests: number;
+  windowMs: number;
+  message: string;
+}) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const key = `${options.prefix}:${getClientIp(req)}`;
+    const now = Date.now();
+    const cutoff = now - options.windowMs;
+    const prev = (rateLimitBuckets.get(key) || []).filter((ts) => ts > cutoff);
+
+    if (prev.length >= options.maxRequests) {
+      const oldest = prev[0] || now;
+      const retryAfterSec = Math.max(1, Math.ceil((oldest + options.windowMs - now) / 1000));
+      res.setHeader('Retry-After', String(retryAfterSec));
+      return res.status(429).json({
+        error: options.message,
+        retryAfterSeconds: retryAfterSec,
+      });
+    }
+
+    prev.push(now);
+    rateLimitBuckets.set(key, prev);
+
+    if (rateLimitBuckets.size > 4000) {
+      for (const [k, stamps] of rateLimitBuckets.entries()) {
+        if (stamps.length === 0 || stamps[stamps.length - 1] < cutoff) {
+          rateLimitBuckets.delete(k);
+        }
+      }
+    }
+    return next();
+  };
+}
+
+const redeemCodeLimiter = createRateLimiter({
+  prefix: 'redeem',
+  maxRequests: 7,
+  windowMs: 15 * 60 * 1000,
+  message: 'Too many activation attempts from this network. Please wait 15 minutes before trying again.',
+});
+
+const adminAuthLimiter = createRateLimiter({
+  prefix: 'admin_auth',
+  maxRequests: 6,
+  windowMs: 15 * 60 * 1000,
+  message: 'Too many admin authentication attempts. Locked for 15 minutes for security.',
+});
+
+const aiRecommendLimiter = createRateLimiter({
+  prefix: 'ai_recommend',
+  maxRequests: 25,
+  windowMs: 10 * 60 * 1000,
+  message: 'Search rate limit temporarily reached. Please wait a few moments.',
+});
+
+const translatorLimiter = createRateLimiter({
+  prefix: 'translator',
+  maxRequests: 50,
+  windowMs: 10 * 60 * 1000,
+  message: 'Translation rate limit temporarily reached. Please wait a few moments.',
+});
+
+const contactLimiter = createRateLimiter({
+  prefix: 'contact',
+  maxRequests: 10,
+  windowMs: 15 * 60 * 1000,
+  message: 'Too many submissions sent recently. Please try again later.',
+});
+
+interface SessionPayload {
+  sid: string;
+  trialId: string;
+  role: 'guest' | 'vip' | 'admin';
+  plan: 'free' | SecurityPlan;
+  codeId?: string;
+  codeHint?: string;
+  termsAccepted: boolean;
+  iat: number;
+  exp: number;
+}
+
+function signSessionToken(payload: SessionPayload): string {
+  const bodyB64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const sigB64 = crypto.createHmac('sha256', SESSION_SECRET).update(bodyB64).digest('base64url');
+  return `${bodyB64}.${sigB64}`;
+}
+
+function verifySessionToken(rawToken?: string | null): SessionPayload | null {
+  if (!rawToken || typeof rawToken !== 'string') return null;
+  const parts = rawToken.trim().split('.');
+  if (parts.length !== 2) return null;
+  const [bodyB64, sigB64] = parts;
+  if (!bodyB64 || !sigB64) return null;
+
+  const expectedSig = crypto.createHmac('sha256', SESSION_SECRET).update(bodyB64).digest('base64url');
+  const sigBuf = Buffer.from(sigB64, 'utf8');
+  const expBuf = Buffer.from(expectedSig, 'utf8');
+  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(Buffer.from(bodyB64, 'base64url').toString('utf8')) as SessionPayload;
+    if (!parsed || typeof parsed.exp !== 'number' || Date.now() > parsed.exp) {
+      return null;
+    }
+    if (!parsed.sid || !parsed.trialId || !parsed.role) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function parseCookies(cookieHeader?: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!cookieHeader) return out;
+  for (const part of cookieHeader.split(';')) {
+    const eqIdx = part.indexOf('=');
+    if (eqIdx <= 0) continue;
+    const k = part.slice(0, eqIdx).trim();
+    const v = part.slice(eqIdx + 1).trim();
+    if (k) {
+      try {
+        out[k] = decodeURIComponent(v);
+      } catch {
+        out[k] = v;
+      }
+    }
+  }
+  return out;
+}
+
+function emitSessionCookie(res: Response, token: string, maxAgeSec: number) {
+  const cookieLine = `${AUTH_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; Max-Age=${maxAgeSec}; HttpOnly; Secure; SameSite=None; Partitioned`;
+  res.append('Set-Cookie', cookieLine);
+}
+
+function resolveSessionFromRequest(req: Request): { session: SessionPayload | null; viaCookie: boolean } {
+  const authHeader = String(req.headers.authorization || '');
+  const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+  if (bearerToken) {
+    const verifiedBearer = verifySessionToken(bearerToken);
+    if (verifiedBearer) return { session: verifiedBearer, viaCookie: false };
+  }
+
+  const cookies = parseCookies(req.headers.cookie);
+  const cookieToken = cookies[AUTH_COOKIE_NAME];
+  if (cookieToken) {
+    const verifiedCookie = verifySessionToken(cookieToken);
+    if (verifiedCookie) return { session: verifiedCookie, viaCookie: true };
+  }
+
+  return { session: null, viaCookie: false };
+}
+
+// Verify Origin matches Host / X-Forwarded-Host OR custom header on cookie-authenticated mutations
+function requireSameOriginOrHeader(req: Request, res: Response, next: NextFunction) {
+  const authHeader = String(req.headers.authorization || '');
+  if (authHeader.startsWith('Bearer ')) {
+    return next();
+  }
+  const hasCustomHeader = String(req.headers['x-requested-with'] || '') === 'AEGEA-App';
+  if (hasCustomHeader) {
+    return next();
+  }
+  const origin = String(req.headers.origin || '');
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+  if (origin && host) {
+    try {
+      const originHost = new URL(origin).host;
+      if (originHost === host) return next();
+    } catch {
+      // reject invalid origin
+    }
+  }
+  return res.status(403).json({ error: 'Cross-site request validation failed.' });
+}
+
+function normalizeActivationCode(raw: string): string {
+  return String(raw || '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '');
+}
+
+function hashActivationCode(normalizedCode: string): string {
+  return crypto.createHmac('sha256', CODE_PEPPER).update(normalizedCode).digest('hex');
+}
+
+function generateSecureActivationCode(): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = crypto.randomBytes(8);
+  let chars = '';
+  for (let i = 0; i < 8; i++) {
+    chars += alphabet[bytes[i] % alphabet.length];
+  }
+  return `AEGEA-${chars.slice(0, 4)}-${chars.slice(4, 8)}`;
+}
+
+function maskActivationCode(code: string): string {
+  const clean = normalizeActivationCode(code);
+  if (clean.length <= 6) return `${clean.slice(0, 2)}••••`;
+  return `${clean.slice(0, 6)}••••${clean.slice(-4)}`;
+}
+
+function isAdminPasscodeConfigured(): boolean {
+  return Boolean(String(process.env.ADMIN_PASSCODE || '').trim() || securityStore.adminPasscodeHash);
+}
+
+function verifyAdminPasscode(inputPasscode: string): boolean {
+  const candidate = String(inputPasscode || '');
+  if (!candidate) return false;
+
+  const envPass = String(process.env.ADMIN_PASSCODE || '').trim();
+  if (envPass) {
+    const a = crypto.createHash('sha256').update(candidate).digest();
+    const b = crypto.createHash('sha256').update(envPass).digest();
+    if (crypto.timingSafeEqual(a, b)) return true;
+  }
+
+  if (securityStore.adminPasscodeHash && securityStore.adminPasscodeSalt) {
+    try {
+      const derived = crypto.scryptSync(candidate, securityStore.adminPasscodeSalt, 64);
+      const expected = Buffer.from(securityStore.adminPasscodeHash, 'hex');
+      if (derived.length === expected.length && crypto.timingSafeEqual(derived, expected)) {
+        return true;
+      }
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+function getGuestSearchesRemaining(trialId: string, clientIp: string): number {
+  const now = Date.now();
+  const trialUsed = securityStore.trials[trialId]?.used ?? 0;
+
+  let ipRecord = securityStore.ipTrials[clientIp];
+  if (!ipRecord || now - ipRecord.windowStart > 24 * 60 * 60 * 1000) {
+    ipRecord = { used: 0, windowStart: now };
+  }
+
+  const byTrial = Math.max(0, GUEST_FREE_SEARCH_LIMIT - trialUsed);
+  const byIp = Math.max(0, MAX_IP_TRIALS_PER_24H - ipRecord.used);
+  return Math.min(byTrial, byIp);
+}
+
+function validateSessionActive(session: SessionPayload): SessionPayload {
+  if (session.role === 'vip' && session.codeId && session.codeId !== 'env') {
+    const rec = securityStore.codes.find((c) => c.id === session.codeId);
+    const expired = Boolean(rec?.expiresAt && Date.now() > Date.parse(rec.expiresAt));
+    if (!rec || rec.revoked || expired) {
+      return {
+        ...session,
+        role: 'guest',
+        plan: 'free',
+        codeId: undefined,
+        codeHint: undefined,
+      };
+    }
+  }
+  return session;
+}
+
+function buildPublicSessionUser(session: SessionPayload, clientIp: string) {
+  const active = validateSessionActive(session);
+  const isAdmin = active.role === 'admin';
+  const isPremium = active.role === 'vip' || isAdmin;
+  const searchesRemaining = isPremium ? 999999 : getGuestSearchesRemaining(active.trialId, clientIp);
+
+  return {
+    uid: active.sid,
+    name: isAdmin ? 'AEGEA Admin' : isPremium ? 'AEGEA VIP' : 'Guest Explorer',
+    email: '',
+    avatar: `https://api.dicebear.com/7.x/shapes/svg?seed=${encodeURIComponent(active.sid)}&backgroundColor=0284c7`,
+    searchesRemaining,
+    isPremium,
+    termsAccepted: Boolean(active.termsAccepted),
+    isAdmin,
+    isGuest: !isPremium,
+    subscriptionPlan: active.plan,
+    planExpiresAt: active.role === 'vip' ? new Date(active.exp).toISOString() : null,
+    codeHint: active.codeHint || null,
+  };
+}
+
+function mintGuestSession(existingTrialId?: string, termsAccepted = false): SessionPayload {
+  const now = Date.now();
+  return {
+    sid: `gst_${crypto.randomBytes(10).toString('hex')}`,
+    trialId: existingTrialId || `trl_${crypto.randomBytes(12).toString('hex')}`,
+    role: 'guest',
+    plan: 'free',
+    termsAccepted,
+    iat: now,
+    exp: now + 30 * 24 * 60 * 60 * 1000,
+  };
+}
+
+function requireAdminMiddleware(req: Request, res: Response, next: NextFunction) {
+  const { session } = resolveSessionFromRequest(req);
+  if (!session || session.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin authorization required.' });
+  }
+  return next();
+}
+
+// Health check for Render / Cloud Run / uptime probes
+app.get('/api/health', (_req: Request, res: Response) => {
+  res.json({ ok: true, status: 'healthy', timestamp: new Date().toISOString() });
+});
+
+// Privacy-Preserving WhatsApp VIP & Support Redirect (keeps personal phone number 100% out of frontend JS/DOM)
+app.get('/api/subscribe-whatsapp', (req: Request, res: Response) => {
+  const envWa = String(process.env.SUPPORT_WHATSAPP || '').replace(/\D/g, '');
+  const digits = envWa || ['30', '6939', '803359'].join('');
+  const topic = String(req.query.topic || '').toLowerCase();
+  const plan = String(req.query.plan || 'monthly').toLowerCase();
+  const lang = String(req.query.lang || 'en').toLowerCase();
+
+  let text = '';
+  if (topic === 'support') {
+    text = 'Hello AEGEA Support! I would like to ask a question or request assistance with the app.';
+    if (lang.startsWith('ar')) {
+      text = 'مرحباً دعم تطبيق AEGEA! أود الاستفسار أو طلب المساعدة بخصوص التطبيق.';
+    } else if (lang.startsWith('el')) {
+      text = 'Γεια σας Υποστήριξη AEGEA! Θα ήθελα να ρωτήσω ή να ζητήσω βοήθεια για την εφαρμογή.';
+    }
+  } else {
+    const planNames: Record<string, { en: string; ar: string; el: string }> = {
+      weekly_pass: {
+        en: '7-Day Greece Trip Pass (€9.99)',
+        ar: 'بطاقة رحلة اليونان 7 أيام (€9.99)',
+        el: 'Πάσο 7 Ημερών (9,99€)',
+      },
+      monthly: {
+        en: 'Monthly VIP Subscription (€5/mo)',
+        ar: 'اشتراك VIP الشهري (€5 شهرياً)',
+        el: 'Μηνιαία Συνδρομή VIP (5€)',
+      },
+      annual: {
+        en: 'Annual VIP Subscription (€50/yr)',
+        ar: 'اشتراك VIP السنوي (€50 سنوياً)',
+        el: 'Ετήσια Συνδρομή VIP (50€)',
+      },
+    };
+    const chosen = planNames[plan] || planNames.monthly;
+
+    text = `Hello AEGEA Support! I would like to subscribe to ${chosen.en} and receive my VIP activation code.`;
+    if (lang.startsWith('ar')) {
+      text = `مرحباً، أرغب بالاشتراك في تطبيق AEGEA (${chosen.ar}) والحصول على رمز التفعيل VIP الخاص بي.`;
+    } else if (lang.startsWith('el')) {
+      text = `Γεια σας! Θα ήθελα να εγγραφώ στο AEGEA (${chosen.el}) και να λάβω τον κωδικό ενεργοποίησης VIP.`;
+    }
+  }
+
+  return res.redirect(302, `https://wa.me/${digits}?text=${encodeURIComponent(text)}`);
+});
+
+// Session inspection / auto guest initialization (no Google login required)
+app.get('/api/auth/session', (req: Request, res: Response) => {
+  const clientIp = getClientIp(req);
+  const resolved = resolveSessionFromRequest(req);
+  let activeSession = resolved.session ? validateSessionActive(resolved.session) : null;
+  let token = '';
+
+  if (!activeSession) {
+    activeSession = mintGuestSession();
+    token = signSessionToken(activeSession);
+    emitSessionCookie(res, token, 30 * 24 * 60 * 60);
+  } else {
+    token = signSessionToken(activeSession);
+    if (!resolved.session || resolved.session.role !== activeSession.role) {
+      emitSessionCookie(res, token, 30 * 24 * 60 * 60);
+    }
+  }
+
+  return res.json({
+    user: buildPublicSessionUser(activeSession, clientIp),
+    sessionToken: token,
+    adminSetupRequired: !isAdminPasscodeConfigured(),
+  });
+});
+
+// Accept Terms & Conditions for current session
+app.post('/api/auth/accept-terms', requireSameOriginOrHeader, (req: Request, res: Response) => {
+  const clientIp = getClientIp(req);
+  const resolved = resolveSessionFromRequest(req);
+  const current = resolved.session ? validateSessionActive(resolved.session) : mintGuestSession();
+  const updated: SessionPayload = { ...current, termsAccepted: true };
+  const token = signSessionToken(updated);
+  emitSessionCookie(res, token, Math.max(3600, Math.floor((updated.exp - Date.now()) / 1000)));
+  return res.json({
+    user: buildPublicSessionUser(updated, clientIp),
+    sessionToken: token,
+    adminSetupRequired: !isAdminPasscodeConfigured(),
+  });
+});
+
+// Redeem VIP Activation Code (strictly rate-limited & constant-time verified)
+app.post('/api/auth/redeem-code', redeemCodeLimiter, requireSameOriginOrHeader, (req: Request, res: Response) => {
+  const { code = '', termsAccepted } = req.body || {};
+  if (!termsAccepted) {
+    return res.status(400).json({ error: 'Please accept the Terms & Conditions before activating your code.' });
+  }
+
+  const normalized = normalizeActivationCode(String(code));
+  if (normalized.length < 6 || normalized.length > 64) {
+    return res.status(400).json({ error: 'Please enter a valid activation code.' });
+  }
+
+  const candidateHash = hashActivationCode(normalized);
+  const now = Date.now();
+  let matchedPlan: SecurityPlan | null = null;
+  let matchedDurationDays = 30;
+  let matchedCodeId = '';
+  let matchedHint = maskActivationCode(normalized);
+
+  // 1. Check persisted admin-issued activation codes
+  const matchedRecord = securityStore.codes.find((entry) => {
+    const a = Buffer.from(entry.codeHash, 'hex');
+    const b = Buffer.from(candidateHash, 'hex');
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  });
+
+  if (matchedRecord) {
+    if (matchedRecord.revoked) {
+      return res.status(401).json({ error: 'This activation code has been revoked.' });
+    }
+    if (matchedRecord.expiresAt && now > Date.parse(matchedRecord.expiresAt)) {
+      return res.status(401).json({ error: 'This activation code has expired.' });
+    }
+    if (matchedRecord.usesCount >= matchedRecord.maxUses) {
+      return res.status(401).json({ error: 'This activation code has reached its maximum device activations.' });
+    }
+    matchedRecord.usesCount += 1;
+    matchedPlan = matchedRecord.plan;
+    matchedDurationDays = matchedRecord.durationDays || 30;
+    matchedCodeId = matchedRecord.id;
+    matchedHint = matchedRecord.codePrefix;
+    persistSecurityStore();
+  } else {
+    // 2. Check optional VIP_ACCESS_CODES env list (for stateless container restarts)
+    const envCodes = String(process.env.VIP_ACCESS_CODES || '')
+      .split(',')
+      .map((c) => normalizeActivationCode(c))
+      .filter(Boolean);
+
+    for (const ec of envCodes) {
+      const a = Buffer.from(hashActivationCode(ec), 'hex');
+      const b = Buffer.from(candidateHash, 'hex');
+      if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
+        matchedPlan = 'monthly';
+        matchedDurationDays = 30;
+        matchedCodeId = 'env';
+        break;
+      }
+    }
+  }
+
+  if (!matchedPlan) {
+    return res.status(401).json({ error: 'Invalid activation code. Please check the code and try again.' });
+  }
+
+  const clientIp = getClientIp(req);
+  const resolved = resolveSessionFromRequest(req);
+  const trialId = resolved.session?.trialId || `trl_${crypto.randomBytes(12).toString('hex')}`;
+  const durationMs = matchedDurationDays * 24 * 60 * 60 * 1000;
+  const vipSession: SessionPayload = {
+    sid: `vip_${crypto.randomBytes(10).toString('hex')}`,
+    trialId,
+    role: 'vip',
+    plan: matchedPlan,
+    codeId: matchedCodeId,
+    codeHint: matchedHint,
+    termsAccepted: true,
+    iat: now,
+    exp: now + durationMs,
+  };
+
+  const token = signSessionToken(vipSession);
+  emitSessionCookie(res, token, Math.floor(durationMs / 1000));
+
+  return res.json({
+    user: buildPublicSessionUser(vipSession, clientIp),
+    sessionToken: token,
+    adminSetupRequired: !isAdminPasscodeConfigured(),
+  });
+});
+
+// Sign out of VIP/Admin session back to standard Guest (preserves server trial counter)
+app.post('/api/auth/signout', requireSameOriginOrHeader, (req: Request, res: Response) => {
+  const clientIp = getClientIp(req);
+  const resolved = resolveSessionFromRequest(req);
+  const guestSession = mintGuestSession(resolved.session?.trialId, Boolean(resolved.session?.termsAccepted));
+  const token = signSessionToken(guestSession);
+  emitSessionCookie(res, token, 30 * 24 * 60 * 60);
+  return res.json({
+    user: buildPublicSessionUser(guestSession, clientIp),
+    sessionToken: token,
+    adminSetupRequired: !isAdminPasscodeConfigured(),
+  });
+});
+
+// One-time inline Admin Passcode setup (locks permanently once claimed)
+app.post('/api/admin/setup', adminAuthLimiter, requireSameOriginOrHeader, (req: Request, res: Response) => {
+  if (isAdminPasscodeConfigured()) {
+    return res.status(409).json({ error: 'Admin passcode is already configured. Please sign in.' });
+  }
+  const passcode = String(req.body?.passcode || '').trim();
+  if (passcode.length < 8 || passcode.length > 128) {
+    return res.status(400).json({ error: 'Admin passcode must be between 8 and 128 characters.' });
+  }
+
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(passcode, salt, 64).toString('hex');
+  securityStore.adminPasscodeSalt = salt;
+  securityStore.adminPasscodeHash = hash;
+  persistSecurityStore();
+
+  const clientIp = getClientIp(req);
+  const resolved = resolveSessionFromRequest(req);
+  const now = Date.now();
+  const adminSession: SessionPayload = {
+    sid: `adm_${crypto.randomBytes(10).toString('hex')}`,
+    trialId: resolved.session?.trialId || `trl_${crypto.randomBytes(12).toString('hex')}`,
+    role: 'admin',
+    plan: 'annual',
+    termsAccepted: true,
+    iat: now,
+    exp: now + 7 * 24 * 60 * 60 * 1000,
+  };
+  const token = signSessionToken(adminSession);
+  emitSessionCookie(res, token, 7 * 24 * 60 * 60);
+
+  return res.json({
+    user: buildPublicSessionUser(adminSession, clientIp),
+    sessionToken: token,
+    adminSetupRequired: false,
+  });
+});
+
+// Admin Passcode Sign-In
+app.post('/api/admin/login', adminAuthLimiter, requireSameOriginOrHeader, (req: Request, res: Response) => {
+  if (!isAdminPasscodeConfigured()) {
+    return res.status(400).json({ error: 'Admin passcode is not set up yet. Complete first-time setup.' });
+  }
+  const passcode = String(req.body?.passcode || '');
+  if (!verifyAdminPasscode(passcode)) {
+    return res.status(401).json({ error: 'Incorrect admin passcode.' });
+  }
+
+  const clientIp = getClientIp(req);
+  const resolved = resolveSessionFromRequest(req);
+  const now = Date.now();
+  const adminSession: SessionPayload = {
+    sid: `adm_${crypto.randomBytes(10).toString('hex')}`,
+    trialId: resolved.session?.trialId || `trl_${crypto.randomBytes(12).toString('hex')}`,
+    role: 'admin',
+    plan: 'annual',
+    termsAccepted: true,
+    iat: now,
+    exp: now + 7 * 24 * 60 * 60 * 1000,
+  };
+  const token = signSessionToken(adminSession);
+  emitSessionCookie(res, token, 7 * 24 * 60 * 60);
+
+  return res.json({
+    user: buildPublicSessionUser(adminSession, clientIp),
+    sessionToken: token,
+    adminSetupRequired: false,
+  });
+});
+
+// Admin Code Manager Routes
+app.get('/api/admin/codes', requireAdminMiddleware, (_req: Request, res: Response) => {
+  const sanitized = securityStore.codes.map((c) => ({
+    id: c.id,
+    codePrefix: c.codePrefix,
+    label: c.label,
+    plan: c.plan,
+    durationDays: c.durationDays,
+    maxUses: c.maxUses,
+    usesCount: c.usesCount,
+    revoked: c.revoked,
+    createdAt: c.createdAt,
+    expiresAt: c.expiresAt,
+  }));
+  return res.json({ codes: sanitized });
+});
+
+app.post('/api/admin/codes', requireAdminMiddleware, requireSameOriginOrHeader, (req: Request, res: Response) => {
+  const {
+    label = 'VIP Client',
+    plan = 'monthly',
+    durationDays,
+    maxUses = 1,
+    customCode = '',
+  } = req.body || {};
+
+  const safePlan: SecurityPlan =
+    plan === 'weekly_pass' || plan === 'annual' ? plan : 'monthly';
+  const defaultDays = safePlan === 'weekly_pass' ? 7 : safePlan === 'annual' ? 365 : 30;
+  const safeDays = Math.min(1095, Math.max(1, Number(durationDays || defaultDays) || defaultDays));
+  const safeMaxUses = Math.min(500, Math.max(1, Number(maxUses || 1) || 1));
+  const safeLabel = String(label || 'VIP Client').trim().slice(0, 80) || 'VIP Client';
+
+  let rawCode = customCode ? normalizeActivationCode(String(customCode)) : generateSecureActivationCode();
+  if (rawCode.length < 6 || rawCode.length > 48 || !/^[A-Z0-9-]+$/.test(rawCode)) {
+    return res.status(400).json({ error: 'Custom code must be 6–48 uppercase letters, numbers, or dashes.' });
+  }
+
+  const codeHash = hashActivationCode(rawCode);
+  if (securityStore.codes.some((c) => c.codeHash === codeHash)) {
+    return res.status(409).json({ error: 'An activation code with this exact value already exists.' });
+  }
+
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + safeDays * 24 * 60 * 60 * 1000).toISOString();
+  const record: StoredActivationCode = {
+    id: `cd_${crypto.randomBytes(6).toString('hex')}`,
+    codeHash,
+    codePrefix: maskActivationCode(rawCode),
+    label: safeLabel,
+    plan: safePlan,
+    durationDays: safeDays,
+    maxUses: safeMaxUses,
+    usesCount: 0,
+    revoked: false,
+    createdAt: now.toISOString(),
+    expiresAt,
+  };
+
+  securityStore.codes.unshift(record);
+  persistSecurityStore();
+
+  return res.status(201).json({
+    rawCode,
+    item: {
+      id: record.id,
+      codePrefix: record.codePrefix,
+      label: record.label,
+      plan: record.plan,
+      durationDays: record.durationDays,
+      maxUses: record.maxUses,
+      usesCount: record.usesCount,
+      revoked: record.revoked,
+      createdAt: record.createdAt,
+      expiresAt: record.expiresAt,
+    },
+  });
+});
+
+app.delete('/api/admin/codes/:id', requireAdminMiddleware, requireSameOriginOrHeader, (req: Request, res: Response) => {
+  const id = String(req.params.id || '').trim();
+  const target = securityStore.codes.find((c) => c.id === id);
+  if (!target) {
+    return res.status(404).json({ error: 'Activation code not found.' });
+  }
+  target.revoked = true;
+  persistSecurityStore();
+  return res.json({ success: true });
+});
+
+app.get('/api/admin/inquiries', requireAdminMiddleware, (_req: Request, res: Response) => {
+  return res.json({
+    partners: securityStore.partnerInquiries,
+    messages: securityStore.contactMessages,
+  });
+});
+
+app.delete('/api/admin/inquiries/:type/:id', requireAdminMiddleware, requireSameOriginOrHeader, (req: Request, res: Response) => {
+  const type = String(req.params.type || '');
+  const id = String(req.params.id || '');
+  if (type === 'partners') {
+    securityStore.partnerInquiries = securityStore.partnerInquiries.filter((p) => p.id !== id);
+    persistSecurityStore();
+    return res.json({ success: true });
+  }
+  if (type === 'messages') {
+    securityStore.contactMessages = securityStore.contactMessages.filter((m) => m.id !== id);
+    persistSecurityStore();
+    return res.json({ success: true });
+  }
+  return res.status(400).json({ error: 'Invalid inquiry type.' });
+});
+
+function consumeGuestSearchQuota(req: Request, res: Response, activeSession: SessionPayload) {
+  const clientIp = getClientIp(req);
+  if (activeSession.role === 'guest') {
+    const now = Date.now();
+    const prevTrial = securityStore.trials[activeSession.trialId]?.used ?? 0;
+    securityStore.trials[activeSession.trialId] = { used: prevTrial + 1, updatedAt: now };
+
+    const prevIp = securityStore.ipTrials[clientIp];
+    if (!prevIp || now - prevIp.windowStart > 24 * 60 * 60 * 1000) {
+      securityStore.ipTrials[clientIp] = { used: 1, windowStart: now };
+    } else {
+      prevIp.used += 1;
+    }
+    persistSecurityStore();
+  }
+  return buildPublicSessionUser(activeSession, clientIp);
 }
 
 // Safe JSON extractor helper that cleans markdown fences and surrounding text
@@ -1764,18 +2605,27 @@ const ITINERARY_RESPONSE_SCHEMA = {
 // Cooldown timestamp when Google Search grounding hits a free-tier quota limit
 let searchGroundingCooldownUntil = 0;
 
-// Real Live Google-Search Grounded AI Recommendation Endpoint
-app.post('/api/recommend', async (req: Request, res: Response) => {
-  const authHeader = req.headers.authorization || '';
-  const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+// Real Live Google-Search Grounded AI Recommendation Endpoint (Guest 2 Free Trial + VIP Activation Codes)
+app.post('/api/recommend', aiRecommendLimiter, requireSameOriginOrHeader, async (req: Request, res: Response) => {
+  const clientIp = getClientIp(req);
+  const resolved = resolveSessionFromRequest(req);
+  let activeSession = resolved.session ? validateSessionActive(resolved.session) : null;
+  let freshlyMintedToken = '';
 
-  if (!idToken) {
-    return res.status(401).json({ error: 'Authentication required. Please sign in with Google.' });
+  if (!activeSession) {
+    activeSession = mintGuestSession();
+    freshlyMintedToken = signSessionToken(activeSession);
+    emitSessionCookie(res, freshlyMintedToken, 30 * 24 * 60 * 60);
   }
 
-  const verifiedUser = await verifyFirebaseIdToken(idToken);
-  if (!verifiedUser || !verifiedUser.emailVerified) {
-    return res.status(401).json({ error: 'Invalid or unverified Google session. Please sign in again.' });
+  if (activeSession.role === 'guest') {
+    const remaining = getGuestSearchesRemaining(activeSession.trialId, clientIp);
+    if (remaining <= 0) {
+      return res.status(403).json({
+        error: 'Your 2 free trial searches have been used. Enter a VIP activation code or subscribe via WhatsApp to unlock unlimited searches.',
+        codeRequired: true,
+      });
+    }
   }
 
   const {
@@ -1832,9 +2682,14 @@ app.post('/api/recommend', async (req: Request, res: Response) => {
 
   const cachedRecommend = getFromTtlCache(serverRecommendCache, recommendCacheKey);
   if (cachedRecommend) {
+    const updatedUser = consumeGuestSearchQuota(req, res, activeSession);
     return res.json({
       ...cachedRecommend,
       searchedAt: now.toISOString(),
+      sessionMeta: {
+        user: updatedUser,
+        ...(freshlyMintedToken ? { sessionToken: freshlyMintedToken } : {}),
+      },
     });
   }
 
@@ -2295,7 +3150,14 @@ CRITICAL RULES:
       80
     );
 
-    return res.json(responsePayload);
+    const updatedUser = consumeGuestSearchQuota(req, res, activeSession);
+    return res.json({
+      ...responsePayload,
+      sessionMeta: {
+        user: updatedUser,
+        ...(freshlyMintedToken ? { sessionToken: freshlyMintedToken } : {}),
+      },
+    });
   } catch (err: any) {
     console.error('[RECOMMEND ERROR]', err);
     return res.status(500).json({
@@ -2305,7 +3167,7 @@ CRITICAL RULES:
 });
 
 // Universal Full-Page & Dynamic Search Result Translation Endpoint (does NOT consume search quota)
-app.post('/api/translate', async (req: Request, res: Response) => {
+app.post('/api/translate', translatorLimiter, async (req: Request, res: Response) => {
   const { targetLanguage = 'English', mode = 'result', payload } = req.body || {};
 
   if (!payload || typeof payload !== 'object') {
@@ -2452,17 +3314,15 @@ app.post('/api/translate', async (req: Request, res: Response) => {
 });
 
 // VIP 3-Day Greece Itinerary Generator Endpoint
-app.post('/api/itinerary', async (req: Request, res: Response) => {
-  const authHeader = req.headers.authorization || '';
-  const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+app.post('/api/itinerary', aiRecommendLimiter, requireSameOriginOrHeader, async (req: Request, res: Response) => {
+  const resolved = resolveSessionFromRequest(req);
+  const activeSession = resolved.session ? validateSessionActive(resolved.session) : null;
 
-  if (!idToken) {
-    return res.status(401).json({ error: 'Authentication required. Please sign in with Google.' });
-  }
-
-  const verifiedUser = await verifyFirebaseIdToken(idToken);
-  if (!verifiedUser || !verifiedUser.emailVerified) {
-    return res.status(401).json({ error: 'Invalid or unverified Google session.' });
+  if (!activeSession || (activeSession.role !== 'vip' && activeSession.role !== 'admin')) {
+    return res.status(403).json({
+      error: 'VIP activation code required to build custom 3-Day VIP Itineraries.',
+      codeRequired: true,
+    });
   }
 
   const { city = 'Athens', foodType = 'Traditional Greek Cuisine', language = 'en', guideResult } = req.body || {};
@@ -2519,26 +3379,45 @@ Requirements:
   return res.json({ itinerary: fallbackItinerary, quotaFallback: true });
 });
 
-// B2B Partner Inquiry Endpoint
-app.post('/api/partner-inquiry', (req: Request, res: Response) => {
-  const { businessName, businessType, city, contactEmail } = req.body || {};
+// B2B Partner Inquiry Endpoint (stored privately in admin inbox; never leaks personal contact details)
+app.post('/api/partner-inquiry', contactLimiter, (req: Request, res: Response) => {
+  const { businessName, businessType, city, contactEmail, websiteUrl = '', notes = '' } = req.body || {};
   if (!businessName || !city || !contactEmail) {
     return res.status(400).json({ error: 'Business name, city, and contact email are required.' });
   }
-  console.log(`Partner listing inquiry (€49/mo): ${businessName} (${businessType}) in ${city} — ${contactEmail}`);
+  const entry: StoredPartnerInquiry = {
+    id: `inq_${crypto.randomBytes(6).toString('hex')}`,
+    businessName: String(businessName).trim().slice(0, 160),
+    businessType: String(businessType || 'taverna').trim().slice(0, 40),
+    city: String(city).trim().slice(0, 100),
+    contactEmail: String(contactEmail).trim().slice(0, 200),
+    websiteUrl: sanitizeHttpUrl(String(websiteUrl || '')).slice(0, 300),
+    notes: String(notes || '').trim().slice(0, 1500),
+    createdAt: new Date().toISOString(),
+  };
+  securityStore.partnerInquiries.unshift(entry);
+  persistSecurityStore();
   return res.json({ success: true });
 });
 
-// Contact endpoint
-app.post('/api/contact', (req: Request, res: Response) => {
+// Contact endpoint (stored privately in admin inbox; never exposes developer email)
+app.post('/api/contact', contactLimiter, (req: Request, res: Response) => {
   const { name, email, message } = req.body || {};
   if (!name || !email || !message) {
     return res.status(400).json({ error: 'Name, email, and message are required.' });
   }
-  console.log(`Received contact message for Sharif Hamad from ${name} (${email}): ${message}`);
+  const entry: StoredContactMessage = {
+    id: `msg_${crypto.randomBytes(6).toString('hex')}`,
+    name: String(name).trim().slice(0, 120),
+    email: String(email).trim().slice(0, 200),
+    message: String(message).trim().slice(0, 2000),
+    createdAt: new Date().toISOString(),
+  };
+  securityStore.contactMessages.unshift(entry);
+  persistSecurityStore();
   return res.json({
     success: true,
-    message: 'Your message has been received by Sharif Hamad (sharifhamadmoko@gmail.com). We will get back to you soon!',
+    message: 'Your message has been received securely by the AEGEA team. We will get back to you soon!',
   });
 });
 
@@ -2615,7 +3494,7 @@ function createServerGeminiClient(apiKey: string, apiVersion: string = 'v1beta',
 }
 
 // 1. Live Camera Vision Translator for Greek Menus, Street Signs & Notices
-app.post('/api/vision-translate', async (req: Request, res: Response) => {
+app.post('/api/vision-translate', translatorLimiter, async (req: Request, res: Response) => {
   const { imageBase64, mimeType = 'image/jpeg', targetLanguage = 'en', mode = 'auto' } = req.body || {};
 
   if (!imageBase64 || typeof imageBase64 !== 'string') {
@@ -2723,7 +3602,7 @@ RULES:
 });
 
 // 2. Real-Time Two-Way Voice Transcription + Translation
-app.post('/api/voice-translate', async (req: Request, res: Response) => {
+app.post('/api/voice-translate', translatorLimiter, async (req: Request, res: Response) => {
   const {
     audioBase64,
     mimeType = 'audio/webm',
@@ -2971,7 +3850,7 @@ function ensureWavBase64(base64Data: string, mimeType?: string): string {
 }
 
 // 3. Gemini 3.8 Neural Text-to-Speech (returns WAV audio/wav base64)
-app.post('/api/tts', async (req: Request, res: Response) => {
+app.post('/api/tts', translatorLimiter, async (req: Request, res: Response) => {
   const { text, language = 'el', voiceName = 'Kore' } = req.body || {};
 
   const cleanText = String(text || '').trim().slice(0, 1200);

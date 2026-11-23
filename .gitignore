@@ -2,9 +2,12 @@ node_modules/
 build/
 dist/
 coverage/
+data/
 .DS_Store
 *.log
+*.local
 .env*
 !.env.example
 android/
 *.apk
+

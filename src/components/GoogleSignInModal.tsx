@@ -1,12 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { signInWithPopup } from 'firebase/auth';
-import { Capacitor } from '@capacitor/core';
-import { Browser } from '@capacitor/browser';
-import { auth, googleProvider, syncSignedInUserProfile } from '../firebase';
-import firebaseConfig from '../../firebase-applet-config.json';
-import { Language } from '../types';
+import React, { useState, useEffect } from 'react';
+import { Language, User } from '../types';
 import { useUiTranslation } from '../hooks/useTranslatedContent';
 import { apiUrl } from '../utils/apiBase';
+import {
+  redeemActivationCode,
+  adminSetupPasscode,
+  adminLoginPasscode,
+} from '../utils/sessionClient';
 import {
   X,
   ShieldCheck,
@@ -14,9 +14,12 @@ import {
   Square,
   ExternalLink,
   AlertCircle,
-  MonitorSmartphone,
+  KeyRound,
   Loader2,
-  RefreshCw,
+  Shield,
+  MessageCircle,
+  CheckCircle2,
+  Sparkles,
 } from 'lucide-react';
 
 interface GoogleSignInModalProps {
@@ -24,6 +27,9 @@ interface GoogleSignInModalProps {
   onClose: () => void;
   onOpenTerms: () => void;
   currentLang: Language;
+  initialTab?: 'vip' | 'admin';
+  adminSetupRequired?: boolean;
+  onSessionUpdated?: (user: User, adminSetupRequired: boolean) => void;
 }
 
 export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
@@ -31,189 +37,103 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
   onClose,
   onOpenTerms,
   currentLang,
+  initialTab = 'vip',
+  adminSetupRequired = false,
+  onSessionUpdated,
 }) => {
   const { t } = useUiTranslation(currentLang);
+  const [activeTab, setActiveTab] = useState<'vip' | 'admin'>(initialTab);
   const [termsAgreed, setTermsAgreed] = useState(false);
+
+  // VIP Activation Code form
+  const [activationCode, setActivationCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [showReloadAction, setShowReloadAction] = useState(false);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
-  const signInInFlightRef = useRef(false);
-  const attemptIdRef = useRef(0);
+  // Admin Passcode form
+  const [adminPasscode, setAdminPasscode] = useState('');
+  const [adminConfirmPasscode, setAdminConfirmPasscode] = useState('');
 
   useEffect(() => {
-    if (!isOpen) {
-      setLoading(false);
-      setShowReloadAction(false);
-      signInInFlightRef.current = false;
-      return;
-    }
-
-    const onComplete = () => {
-      signInInFlightRef.current = false;
-      setLoading(false);
+    if (isOpen) {
+      setActiveTab(initialTab);
       setErrorMsg(null);
-      setShowReloadAction(false);
-      onClose();
-    };
-    const onErr = (ev: Event) => {
-      const detail = (ev as CustomEvent<string>)?.detail;
-      signInInFlightRef.current = false;
+      setSuccessMsg(null);
       setLoading(false);
-      setErrorMsg(detail || t.auth.signInGenericError);
-    };
-
-    window.addEventListener('aegea:mobile-auth-complete', onComplete);
-    window.addEventListener('aegea:mobile-auth-error', onErr);
-
-    let browserHandle: any = null;
-    if (Capacitor.isNativePlatform()) {
-      browserHandle = Browser.addListener('browserFinished', () => {
-        signInInFlightRef.current = false;
-        setLoading(false);
-      });
     }
-
-    return () => {
-      window.removeEventListener('aegea:mobile-auth-complete', onComplete);
-      window.removeEventListener('aegea:mobile-auth-error', onErr);
-      if (browserHandle?.then) {
-        browserHandle.then((h: any) => h.remove()).catch(() => {});
-      }
-    };
-  }, [isOpen, onClose, t.auth.signInGenericError]);
+  }, [isOpen, initialTab]);
 
   if (!isOpen) return null;
 
-  const checkHostAuthorizedNow = async (host: string): Promise<boolean> => {
-    try {
-      if (!firebaseConfig?.apiKey || !host) return false;
-      const res = await fetch(
-        `https://www.googleapis.com/identitytoolkit/v3/relyingparty/getProjectConfig?key=${encodeURIComponent(firebaseConfig.apiKey)}`,
-        { signal: AbortSignal.timeout(3000) }
-      );
-      if (!res.ok) return false;
-      const data = await res.json();
-      const domains: string[] = Array.isArray(data?.authorizedDomains) ? data.authorizedDomains : [];
-      return domains.some((d) => d.toLowerCase() === host.toLowerCase());
-    } catch {
-      return false;
-    }
-  };
+  const whatsappHref = apiUrl(`/api/subscribe-whatsapp?lang=${encodeURIComponent(currentLang)}`);
 
-  const formatAuthError = async (err: any): Promise<{ message: string; needsReload: boolean }> => {
-    const code = err?.code || '';
-    if (code === 'auth/popup-closed-by-user') {
-      return { message: t.auth.popupClosedError, needsReload: false };
-    }
-    if (code === 'auth/cancelled-popup-request') {
-      return {
-        message:
-          t.auth.cancelledPopupError ||
-          'A Google Sign-In window is already active or was cancelled. Please wait a moment and try once more.',
-        needsReload: false,
-      };
-    }
-    if (code === 'auth/popup-blocked') {
-      return { message: t.auth.popupBlockedError, needsReload: false };
-    }
-    if (code === 'auth/unauthorized-domain') {
-      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-      const isAr = String(currentLang || '').toLowerCase().startsWith('ar');
-      const authorizedNow = await checkHostAuthorizedNow(host);
-      if (authorizedNow) {
-        return {
-          message: isAr
-            ? `تم تفعيل النطاق (${host}) بنجاح، لكن المتصفح يحتفظ بالجلسة القديمة. اضغط على زر التحديث أدناه ثم سجل الدخول.`
-            : `Domain (${host}) is now authorized, but this tab still holds a cached session. Click Refresh below to reload and sign in.`,
-          needsReload: true,
-        };
-      }
-      if (isAr) {
-        return {
-          message: `هذا النطاق (${host}) غير مضاف بعد في قائمة النطاقات المصرح بها في Firebase Authentication. أضف "${host}" في إعدادات Firebase Auth (Authorized domains) ثم حدّث الصفحة.`,
-          needsReload: true,
-        };
-      }
-      return {
-        message: `Domain (${host}) is not listed in Firebase Authentication → Settings → Authorized domains yet. Add "${host}" in Firebase Console and refresh.`,
-        needsReload: true,
-      };
-    }
-    return { message: err?.message || t.auth.signInGenericError, needsReload: false };
-  };
-
-  const handleGoogleSignIn = async () => {
-    if (signInInFlightRef.current || loading) {
-      return;
-    }
-
+  const handleRedeemCode = async (e: React.FormEvent) => {
+    e.preventDefault();
     if (!termsAgreed) {
       setErrorMsg(t.auth.agreementRequiredNotice);
-      setShowReloadAction(false);
+      return;
+    }
+    const cleanCode = activationCode.trim();
+    if (!cleanCode) {
+      setErrorMsg(t.auth.signInGenericError);
       return;
     }
 
-    signInInFlightRef.current = true;
-    const currentAttemptId = ++attemptIdRef.current;
     setLoading(true);
     setErrorMsg(null);
-    setShowReloadAction(false);
+    setSuccessMsg(null);
 
     try {
-      // On native Android APK, prefer Chrome Custom Tab on our already-authorized backend domain
-      if (Capacitor.isNativePlatform()) {
-        let bridgeReady = false;
-        try {
-          const statusRes = await fetch(apiUrl('/api/mobile-auth/status'), {
-            signal: AbortSignal.timeout(3000),
-          });
-          if (statusRes.ok) {
-            const statusData = await statusRes.json().catch(() => null);
-            bridgeReady = Boolean(statusData?.ready);
-          }
-        } catch {
-          bridgeReady = false;
-        }
-
-        if (bridgeReady) {
-          await Browser.open({
-            url: apiUrl(`/mobile-auth?lang=${encodeURIComponent(currentLang)}`),
-            presentationStyle: 'popover',
-          });
-          return;
-        }
+      const result = await redeemActivationCode(cleanCode, true);
+      setSuccessMsg(t.auth.codeActivatedSuccess || 'VIP Access Activated Successfully!');
+      setActivationCode('');
+      if (onSessionUpdated) {
+        onSessionUpdated(result.user, result.adminSetupRequired);
       }
-
-      const result = await signInWithPopup(auth, googleProvider);
-      await syncSignedInUserProfile(result.user);
-      if (attemptIdRef.current === currentAttemptId) {
-        signInInFlightRef.current = false;
-        setLoading(false);
+      setTimeout(() => {
         onClose();
-      }
+      }, 850);
     } catch (err: any) {
-      const code = err?.code || '';
-      const isBenignPopupCancel =
-        code === 'auth/popup-closed-by-user' ||
-        code === 'auth/cancelled-popup-request' ||
-        code === 'auth/popup-blocked';
+      setErrorMsg(err?.message || t.auth.signInGenericError);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-      if (code === 'auth/cancelled-popup-request' && attemptIdRef.current !== currentAttemptId) {
+  const handleAdminSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg(null);
+    setSuccessMsg(null);
+
+    if (adminSetupRequired) {
+      if (adminPasscode.trim().length < 8 || adminPasscode !== adminConfirmPasscode) {
+        setErrorMsg(t.auth.adminPasscodeMismatch || 'Passcodes do not match or are under 8 characters.');
         return;
       }
+    } else if (!adminPasscode.trim()) {
+      setErrorMsg(t.auth.signInGenericError);
+      return;
+    }
 
-      if (!isBenignPopupCancel) {
-        console.warn('Google Sign-In failed:', code || err?.message || err);
+    setLoading(true);
+    try {
+      const result = adminSetupRequired
+        ? await adminSetupPasscode(adminPasscode.trim())
+        : await adminLoginPasscode(adminPasscode);
+      setAdminPasscode('');
+      setAdminConfirmPasscode('');
+      setSuccessMsg(t.auth.adminBadge);
+      if (onSessionUpdated) {
+        onSessionUpdated(result.user, false);
       }
-
-      const formatted = await formatAuthError(err);
-      if (attemptIdRef.current === currentAttemptId) {
-        signInInFlightRef.current = false;
-        setLoading(false);
-        setErrorMsg(formatted.message);
-        setShowReloadAction(formatted.needsReload);
-      }
+      setTimeout(() => {
+        onClose();
+      }, 700);
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Admin authentication failed.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -244,116 +164,211 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
           </button>
         </div>
 
+        {/* Mode Switcher: VIP Activation vs Admin Panel */}
+        <div className="px-6 pt-4">
+          <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700">
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('vip');
+                setErrorMsg(null);
+              }}
+              className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                activeTab === 'vip'
+                  ? 'bg-white dark:bg-slate-900 text-sky-700 dark:text-sky-400 shadow-xs'
+                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              <KeyRound className="w-3.5 h-3.5" />
+              <span>{t.auth.vipTabLabel || 'VIP Activation'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('admin');
+                setErrorMsg(null);
+              }}
+              className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                activeTab === 'admin'
+                  ? 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-400 shadow-xs'
+                  : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              <Shield className="w-3.5 h-3.5" />
+              <span>{t.auth.adminTabLabel || 'Admin Panel'}</span>
+            </button>
+          </div>
+        </div>
+
         {/* Body */}
         <div className="p-6 space-y-5">
           {errorMsg && (
-            <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs space-y-2.5">
-              <div className="flex items-start gap-2.5">
-                <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
-                <span className="leading-relaxed">{errorMsg}</span>
-              </div>
-              {showReloadAction && (
-                <button
-                  type="button"
-                  onClick={() => window.location.reload()}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs transition-colors cursor-pointer"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  <span>{t.auth.reloadAndRetry || 'Refresh Page & Retry'}</span>
-                </button>
-              )}
+            <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs flex items-start gap-2.5">
+              <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+              <span className="leading-relaxed">{errorMsg}</span>
             </div>
           )}
 
-          {/* Cross-device info */}
-          <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 flex items-start gap-3">
-            <MonitorSmartphone className="w-5 h-5 text-sky-700 dark:text-sky-400 shrink-0 mt-0.5" />
-            <div className="space-y-1">
-              <p className="text-xs font-semibold text-slate-900 dark:text-slate-100">
-                {t.auth.simulationNotice}
-              </p>
-              <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-                {t.auth.allDevicesNotice}
-              </p>
+          {successMsg && (
+            <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-xs flex items-center gap-2 font-bold">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{successMsg}</span>
             </div>
-          </div>
+          )}
 
-          {/* Mandatory Terms & Conditions Checkbox */}
-          <div className="p-4 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/60 space-y-2.5">
-            <p className="text-xs font-semibold text-amber-950 dark:text-amber-200 leading-snug">
-              {t.auth.codeEntryConsentNotice}
-            </p>
+          {activeTab === 'vip' ? (
+            <form onSubmit={handleRedeemCode} className="space-y-4">
+              {/* WhatsApp Subscription Callout */}
+              <div className="p-4 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/60 space-y-3">
+                <div className="flex items-start gap-2.5">
+                  <Sparkles className="w-4 h-4 text-emerald-700 dark:text-emerald-400 shrink-0 mt-0.5" />
+                  <p className="text-xs text-emerald-950 dark:text-emerald-100 leading-relaxed">
+                    {t.auth.requestCodeViaWhatsapp}
+                  </p>
+                </div>
+                <a
+                  href={whatsappHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-2 transition-colors"
+                >
+                  <MessageCircle className="w-4 h-4 shrink-0" />
+                  <span>{t.auth.subscribeWhatsappBtn}</span>
+                </a>
+              </div>
 
-            <div className="flex items-start gap-2.5 pt-0.5">
+              {/* Mandatory Terms & Conditions Checkbox */}
+              <div className="p-3.5 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/60 space-y-2">
+                <div className="flex items-start gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTermsAgreed(!termsAgreed);
+                      setErrorMsg(null);
+                    }}
+                    className="mt-0.5 text-amber-900 dark:text-amber-300 shrink-0 focus:outline-none cursor-pointer"
+                    aria-label="Agree to Terms and Conditions"
+                  >
+                    {termsAgreed ? (
+                      <CheckSquare className="w-5 h-5 text-sky-700 dark:text-sky-400" />
+                    ) : (
+                      <Square className="w-5 h-5 text-amber-700 dark:text-amber-400" />
+                    )}
+                  </button>
+
+                  <div className="text-xs text-slate-700 dark:text-slate-200 leading-relaxed">
+                    <span>{t.auth.termsAgreementCheckbox} </span>
+                    <button
+                      type="button"
+                      onClick={onOpenTerms}
+                      className="font-semibold underline text-sky-700 dark:text-sky-400 hover:text-sky-900 dark:hover:text-sky-300 inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <span>{t.auth.termsLinkText}</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Activation Code Input */}
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="vip-activation-code-input"
+                  className="text-xs font-bold text-slate-800 dark:text-slate-200 block"
+                >
+                  {t.auth.enterActivationCode}
+                </label>
+                <input
+                  id="vip-activation-code-input"
+                  type="text"
+                  value={activationCode}
+                  onChange={(e) => setActivationCode(e.target.value.toUpperCase())}
+                  placeholder={t.auth.activationCodePlaceholder}
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 font-mono text-sm font-bold tracking-wider text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sky-600"
+                />
+              </div>
+
               <button
-                type="button"
-                onClick={() => {
-                  setTermsAgreed(!termsAgreed);
-                  setErrorMsg(null);
-                }}
-                className="mt-0.5 text-amber-900 dark:text-amber-300 shrink-0 focus:outline-none cursor-pointer"
-                aria-label="Agree to Terms and Conditions"
+                type="submit"
+                disabled={loading}
+                className={`w-full py-3.5 px-5 rounded-xl font-bold text-sm flex items-center justify-center gap-2.5 transition-all cursor-pointer ${
+                  termsAgreed
+                    ? 'bg-sky-700 hover:bg-sky-800 text-white shadow-sm'
+                    : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                }`}
               >
-                {termsAgreed ? (
-                  <CheckSquare className="w-5 h-5 text-sky-700 dark:text-sky-400" />
+                {loading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>{t.auth.activatingCodeLabel}</span>
+                  </>
                 ) : (
-                  <Square className="w-5 h-5 text-amber-700 dark:text-amber-400" />
+                  <>
+                    <KeyRound className="w-4 h-4" />
+                    <span>{t.auth.activateCodeBtn}</span>
+                  </>
                 )}
               </button>
-
-              <div className="text-xs text-slate-700 dark:text-slate-200 leading-relaxed">
-                <span>{t.auth.termsAgreementCheckbox} </span>
-                <button
-                  type="button"
-                  onClick={onOpenTerms}
-                  className="font-semibold underline text-sky-700 dark:text-sky-400 hover:text-sky-900 dark:hover:text-sky-300 inline-flex items-center gap-1 cursor-pointer"
-                >
-                  <span>{t.auth.termsLinkText}</span>
-                  <ExternalLink className="w-3 h-3" />
-                </button>
+            </form>
+          ) : (
+            <form onSubmit={handleAdminSubmit} className="space-y-4">
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 space-y-1.5">
+                <p className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                  <Shield className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                  <span>
+                    {adminSetupRequired
+                      ? t.auth.adminSetupTitle
+                      : t.auth.adminLoginTitle}
+                  </span>
+                </p>
+                {adminSetupRequired && (
+                  <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                    {t.auth.adminSetupDesc}
+                  </p>
+                )}
               </div>
-            </div>
-          </div>
 
-          {/* Real Google Sign-In Button */}
-          <button
-            type="button"
-            disabled={loading}
-            onClick={handleGoogleSignIn}
-            className={`w-full py-3.5 px-5 rounded-xl font-bold text-sm flex items-center justify-center gap-3 transition-all border cursor-pointer ${
-              termsAgreed
-                ? 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 border-slate-900 dark:border-white hover:bg-slate-800 dark:hover:bg-slate-100 shadow-sm'
-                : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700'
-            }`}
-          >
-            {loading ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
-                <path
-                  fill="#4285F4"
-                  d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+              <div className="space-y-3">
+                <input
+                  type="password"
+                  required
+                  value={adminPasscode}
+                  onChange={(e) => setAdminPasscode(e.target.value)}
+                  placeholder={t.auth.adminPasscodePlaceholder}
+                  autoComplete="current-password"
+                  className="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-600"
                 />
-                <path
-                  fill="#34A853"
-                  d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                />
-                <path
-                  fill="#FBBC05"
-                  d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                />
-                <path
-                  fill="#EA4335"
-                  d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                />
-              </svg>
-            )}
-            <span>{t.auth.continueWithGoogle}</span>
-          </button>
+
+                {adminSetupRequired && (
+                  <input
+                    type="password"
+                    required
+                    value={adminConfirmPasscode}
+                    onChange={(e) => setAdminConfirmPasscode(e.target.value)}
+                    placeholder={t.auth.adminConfirmPasscodePlaceholder}
+                    autoComplete="new-password"
+                    className="w-full px-4 py-3 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                  />
+                )}
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-3.5 px-5 rounded-xl font-bold text-sm bg-emerald-700 hover:bg-emerald-800 disabled:opacity-60 text-white flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              >
+                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Shield className="w-4 h-4" />}
+                <span>{adminSetupRequired ? t.auth.adminClaimBtn : t.auth.adminLoginBtn}</span>
+              </button>
+            </form>
+          )}
 
           <div className="flex items-center justify-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-            <span>Firebase Google OAuth 2.0</span>
+            <span>{t.auth.simulationNotice}</span>
           </div>
         </div>
       </div>

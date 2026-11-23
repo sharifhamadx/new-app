@@ -1,7 +1,7 @@
 import { Capacitor } from '@capacitor/core';
 
 const DEFAULT_HOSTED_BACKEND =
-  'https://ais-pre-vbei53jcf2iskwspzf3lnz-288600478609.europe-west2.run.app';
+  'https://ais-pre-z6rujnvxk65z7zmypdzh7l-288600478609.europe-west2.run.app';
 
 export function apiUrl(path: string): string {
   const cleanPath = path.startsWith('/') ? path : `/${path}`;

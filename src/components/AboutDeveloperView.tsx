@@ -1,18 +1,16 @@
-import React, { useState, useEffect } from 'react';
-import {
-  collection,
-  doc,
-  setDoc,
-  deleteDoc,
-  query,
-  limit,
-  onSnapshot,
-  serverTimestamp,
-} from 'firebase/firestore';
-import { auth, db, handleFirestoreError, OperationType } from '../firebase';
-import { Language, User } from '../types';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Language, User, SubscriptionPlan } from '../types';
 import { useUiTranslation } from '../hooks/useTranslatedContent';
 import { apiUrl } from '../utils/apiBase';
+import {
+  adminFetchCodes,
+  adminCreateCode,
+  adminRevokeCode,
+  adminFetchInquiries,
+  adminDeleteInquiry,
+  MaskedActivationCode,
+  AdminInquiriesResponse,
+} from '../utils/sessionClient';
 import {
   GraduationCap,
   Flag,
@@ -24,33 +22,26 @@ import {
   Building2,
   Shield,
   Trash2,
+  KeyRound,
+  Plus,
+  Copy,
+  Check,
+  Ban,
+  MessageCircle,
+  Loader2,
+  Lock,
 } from 'lucide-react';
 
 interface AboutDeveloperViewProps {
   currentLang: Language;
   user?: User | null;
-}
-
-interface AdminPartnerInquiry {
-  id: string;
-  businessName: string;
-  businessType: string;
-  city: string;
-  contactEmail: string;
-  websiteUrl?: string;
-  notes?: string;
-}
-
-interface AdminContactMessage {
-  id: string;
-  name: string;
-  email: string;
-  message: string;
+  onOpenAdminLogin?: () => void;
 }
 
 export const AboutDeveloperView: React.FC<AboutDeveloperViewProps> = ({
   currentLang,
   user,
+  onOpenAdminLogin,
 }) => {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -70,48 +61,109 @@ export const AboutDeveloperView: React.FC<AboutDeveloperViewProps> = ({
   const [partnerSuccess, setPartnerSuccess] = useState(false);
   const [partnerError, setPartnerError] = useState<string | null>(null);
 
-  // Site Admin Inbox (visible only when sharifhamadx122@gmail.com / admin is signed in)
-  const [adminPartners, setAdminPartners] = useState<AdminPartnerInquiry[]>([]);
-  const [adminMessages, setAdminMessages] = useState<AdminContactMessage[]>([]);
+  // Admin Activation Code Manager & Inbox state (visible ONLY when user.isAdmin is verified server-side)
+  const [adminCodes, setAdminCodes] = useState<MaskedActivationCode[]>([]);
+  const [adminInquiries, setAdminInquiries] = useState<AdminInquiriesResponse>({
+    partners: [],
+    messages: [],
+  });
+  const [isLoadingAdmin, setIsLoadingAdmin] = useState(false);
+  const [codeLabel, setCodeLabel] = useState('WhatsApp VIP Client');
+  const [codePlan, setCodePlan] = useState<SubscriptionPlan>('monthly');
+  const [codeMaxUses, setCodeMaxUses] = useState(1);
+  const [customCodeInput, setCustomCodeInput] = useState('');
+  const [isCreatingCode, setIsCreatingCode] = useState(false);
+  const [newlyGeneratedCode, setNewlyGeneratedCode] = useState<string | null>(null);
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [adminActionError, setAdminActionError] = useState<string | null>(null);
 
   const { t } = useUiTranslation(currentLang);
+  const whatsappUrl = apiUrl(`/api/subscribe-whatsapp?topic=support&lang=${encodeURIComponent(currentLang)}`);
 
-  useEffect(() => {
-    if (!user?.isAdmin || !auth.currentUser) {
-      setAdminPartners([]);
-      setAdminMessages([]);
+  const loadAdminWorkspace = useCallback(async () => {
+    if (!user?.isAdmin) {
+      setAdminCodes([]);
+      setAdminInquiries({ partners: [], messages: [] });
       return;
     }
-
-    const unsubPartners = onSnapshot(
-      query(collection(db, 'partnerInquiries'), limit(50)),
-      (snap) => {
-        setAdminPartners(
-          snap.docs.map((d) => ({ ...(d.data() as AdminPartnerInquiry), id: d.id }))
-        );
-      },
-      (err) => {
-        handleFirestoreError(err, OperationType.LIST, 'partnerInquiries');
-      }
-    );
-
-    const unsubMessages = onSnapshot(
-      query(collection(db, 'contactMessages'), limit(50)),
-      (snap) => {
-        setAdminMessages(
-          snap.docs.map((d) => ({ ...(d.data() as AdminContactMessage), id: d.id }))
-        );
-      },
-      (err) => {
-        handleFirestoreError(err, OperationType.LIST, 'contactMessages');
-      }
-    );
-
-    return () => {
-      unsubPartners();
-      unsubMessages();
-    };
+    setIsLoadingAdmin(true);
+    setAdminActionError(null);
+    try {
+      const [codesList, inquiriesData] = await Promise.all([
+        adminFetchCodes(),
+        adminFetchInquiries(),
+      ]);
+      setAdminCodes(codesList);
+      setAdminInquiries(inquiriesData);
+    } catch (err: any) {
+      setAdminActionError(err?.message || 'Could not load admin workspace.');
+    } finally {
+      setIsLoadingAdmin(false);
+    }
   }, [user?.isAdmin]);
+
+  useEffect(() => {
+    void loadAdminWorkspace();
+  }, [loadAdminWorkspace]);
+
+  const handleGenerateCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsCreatingCode(true);
+    setAdminActionError(null);
+    setNewlyGeneratedCode(null);
+    setCopiedCode(false);
+    const defaultDays = codePlan === 'weekly_pass' ? 7 : codePlan === 'annual' ? 365 : 30;
+    try {
+      const created = await adminCreateCode({
+        label: codeLabel.trim() || 'VIP Client',
+        plan: codePlan,
+        durationDays: defaultDays,
+        maxUses: Math.max(1, Number(codeMaxUses) || 1),
+        customCode: customCodeInput.trim() || undefined,
+      });
+      setNewlyGeneratedCode(created.rawCode);
+      setCustomCodeInput('');
+      setAdminCodes((prev) => [created.item, ...prev]);
+    } catch (err: any) {
+      setAdminActionError(err?.message || 'Could not create activation code.');
+    } finally {
+      setIsCreatingCode(false);
+    }
+  };
+
+  const handleRevokeCode = async (id: string) => {
+    setAdminActionError(null);
+    try {
+      await adminRevokeCode(id);
+      setAdminCodes((prev) => prev.map((c) => (c.id === id ? { ...c, revoked: true } : c)));
+    } catch (err: any) {
+      setAdminActionError(err?.message || 'Could not revoke code.');
+    }
+  };
+
+  const handleCopyGenerated = async () => {
+    if (!newlyGeneratedCode) return;
+    try {
+      await navigator.clipboard.writeText(newlyGeneratedCode);
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 2000);
+    } catch {
+      // ignore clipboard errors
+    }
+  };
+
+  const handleDeleteAdminItem = async (type: 'partners' | 'messages', id: string) => {
+    setAdminActionError(null);
+    try {
+      await adminDeleteInquiry(type, id);
+      setAdminInquiries((prev) => ({
+        partners: type === 'partners' ? prev.partners.filter((p) => p.id !== id) : prev.partners,
+        messages: type === 'messages' ? prev.messages.filter((m) => m.id !== id) : prev.messages,
+      }));
+    } catch (err: any) {
+      setAdminActionError(err?.message || 'Could not delete item.');
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -121,25 +173,18 @@ export const AboutDeveloperView: React.FC<AboutDeveloperViewProps> = ({
     setErrorMsg(null);
 
     try {
-      const msgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      const msgPath = `contactMessages/${msgId}`;
-      try {
-        await setDoc(doc(db, msgPath), {
-          id: msgId,
-          name: name.trim().slice(0, 120),
-          email: email.trim().slice(0, 200),
-          message: message.trim().slice(0, 2000),
-          createdAt: serverTimestamp(),
-        });
-      } catch (err) {
-        handleFirestoreError(err, OperationType.CREATE, msgPath);
-      }
-
-      await fetch(apiUrl('/api/contact'), {
+      const res = await fetch(apiUrl('/api/contact'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'AEGEA-App',
+        },
         body: JSON.stringify({ name: name.trim(), email: email.trim(), message: message.trim() }),
       });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || 'Could not send message. Please try again.');
+      }
 
       setSentNotice(true);
       setMessage('');
@@ -160,27 +205,12 @@ export const AboutDeveloperView: React.FC<AboutDeveloperViewProps> = ({
     setPartnerError(null);
 
     try {
-      const inquiryId = `inq_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      const inquiryPath = `partnerInquiries/${inquiryId}`;
-
-      try {
-        await setDoc(doc(db, inquiryPath), {
-          id: inquiryId,
-          businessName: businessName.trim().slice(0, 160),
-          businessType,
-          city: partnerCity.trim().slice(0, 100),
-          contactEmail: partnerEmail.trim().slice(0, 200),
-          websiteUrl: websiteUrl.trim().slice(0, 300),
-          notes: partnerNotes.trim().slice(0, 1500),
-          createdAt: serverTimestamp(),
-        });
-      } catch (err) {
-        handleFirestoreError(err, OperationType.CREATE, inquiryPath);
-      }
-
-      await fetch(apiUrl('/api/partner-inquiry'), {
+      const res = await fetch(apiUrl('/api/partner-inquiry'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'AEGEA-App',
+        },
         body: JSON.stringify({
           businessName: businessName.trim(),
           businessType,
@@ -190,6 +220,10 @@ export const AboutDeveloperView: React.FC<AboutDeveloperViewProps> = ({
           notes: partnerNotes.trim(),
         }),
       });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || 'Could not submit partner inquiry. Please try again.');
+      }
 
       setPartnerSuccess(true);
       setBusinessName('');
@@ -205,18 +239,9 @@ export const AboutDeveloperView: React.FC<AboutDeveloperViewProps> = ({
     }
   };
 
-  const handleDeleteAdminItem = async (col: 'partnerInquiries' | 'contactMessages', id: string) => {
-    const targetPath = `${col}/${id}`;
-    try {
-      await deleteDoc(doc(db, targetPath));
-    } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, targetPath);
-    }
-  };
-
   return (
     <div className="max-w-4xl mx-auto space-y-10 pb-16">
-      {/* Site Admin Exclusive Inbox & Partner Leads (visible only to sharifhamadx122@gmail.com) */}
+      {/* Site Admin Exclusive Console: Activation Code Generator & Inbox */}
       {user?.isAdmin && (
         <div className="rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-300 dark:border-emerald-800 p-6 sm:p-8 space-y-6">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -233,19 +258,137 @@ export const AboutDeveloperView: React.FC<AboutDeveloperViewProps> = ({
             {t.auth.adminWelcome}
           </p>
 
+          {adminActionError && (
+            <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{adminActionError}</span>
+            </div>
+          )}
+
+          {/* VIP Activation Code Generator */}
+          <div className="bg-white dark:bg-slate-900 rounded-xl p-5 border border-slate-200 dark:border-slate-800 space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <KeyRound className="w-4 h-4 text-sky-700 dark:text-sky-400" />
+                <span>VIP Activation Code Generator</span>
+              </h3>
+              {isLoadingAdmin && <Loader2 className="w-4 h-4 animate-spin text-sky-600" />}
+            </div>
+
+            <form onSubmit={handleGenerateCode} className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+              <input
+                type="text"
+                value={codeLabel}
+                onChange={(e) => setCodeLabel(e.target.value)}
+                placeholder="Client Name / Note"
+                className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs text-slate-900 dark:text-white"
+              />
+              <select
+                value={codePlan}
+                onChange={(e) => setCodePlan(e.target.value as SubscriptionPlan)}
+                className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs text-slate-900 dark:text-white cursor-pointer"
+              >
+                <option value="weekly_pass">7-Day Pass (€9.99)</option>
+                <option value="monthly">Monthly VIP (€5 · 30d)</option>
+                <option value="annual">Annual VIP (€50 · 365d)</option>
+              </select>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={codeMaxUses}
+                onChange={(e) => setCodeMaxUses(Math.max(1, Number(e.target.value) || 1))}
+                placeholder="Max devices"
+                title="Max device activations"
+                className="px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs text-slate-900 dark:text-white tabular-nums"
+              />
+              <button
+                type="submit"
+                disabled={isCreatingCode}
+                className="px-4 py-2 rounded-lg bg-sky-700 hover:bg-sky-800 disabled:opacity-60 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                {isCreatingCode ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                <span>Create Code</span>
+              </button>
+            </form>
+
+            <input
+              type="text"
+              value={customCodeInput}
+              onChange={(e) => setCustomCodeInput(e.target.value.toUpperCase())}
+              placeholder="Optional custom code (leave blank for crypto-random AEGEA-XXXX-XXXX)"
+              className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 font-mono text-xs text-slate-900 dark:text-white"
+            />
+
+            {newlyGeneratedCode && (
+              <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-700 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-semibold text-emerald-800 dark:text-emerald-300">
+                    Copy & send this code via WhatsApp (shown once for security):
+                  </p>
+                  <p className="font-mono text-base font-extrabold tracking-wider text-slate-900 dark:text-white mt-0.5">
+                    {newlyGeneratedCode}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCopyGenerated}
+                  className="px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                >
+                  {copiedCode ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedCode ? 'Copied' : 'Copy Code'}</span>
+                </button>
+              </div>
+            )}
+
+            {adminCodes.length > 0 && (
+              <div className="space-y-2 max-h-60 overflow-y-auto pt-1">
+                {adminCodes.map((c) => (
+                  <div
+                    key={c.id}
+                    className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 text-xs flex items-center justify-between gap-3"
+                  >
+                    <div className="min-w-0 space-y-0.5">
+                      <p className="font-mono font-bold text-slate-900 dark:text-white truncate">
+                        {c.codePrefix}{' '}
+                        <span className="font-sans font-normal text-slate-500 dark:text-slate-400">
+                          · {c.label} · {c.plan}
+                        </span>
+                      </p>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 tabular-nums">
+                        Uses: {c.usesCount}/{c.maxUses} ·{' '}
+                        {c.revoked ? 'Revoked' : 'Active'}
+                      </p>
+                    </div>
+                    {!c.revoked && (
+                      <button
+                        type="button"
+                        onClick={() => handleRevokeCode(c.id)}
+                        className="px-2.5 py-1.5 rounded-lg text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 font-semibold flex items-center gap-1 cursor-pointer shrink-0"
+                      >
+                        <Ban className="w-3.5 h-3.5" />
+                        <span>Revoke</span>
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-2">
             <div className="bg-white dark:bg-slate-900 rounded-xl p-4 border border-slate-200 dark:border-slate-800 space-y-3">
               <h3 className="text-xs font-bold text-slate-900 dark:text-white flex items-center justify-between">
                 <span>Partner Applications (€49/mo)</span>
                 <span className="tabular-nums text-sky-700 dark:text-sky-400">
-                  {adminPartners.length}
+                  {adminInquiries.partners.length}
                 </span>
               </h3>
-              {adminPartners.length === 0 ? (
+              {adminInquiries.partners.length === 0 ? (
                 <p className="text-xs text-slate-500 dark:text-slate-400">—</p>
               ) : (
                 <div className="space-y-2.5 max-h-60 overflow-y-auto">
-                  {adminPartners.map((p) => (
+                  {adminInquiries.partners.map((p) => (
                     <div
                       key={p.id}
                       className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 text-xs flex items-start justify-between gap-2"
@@ -260,7 +403,7 @@ export const AboutDeveloperView: React.FC<AboutDeveloperViewProps> = ({
                       </div>
                       <button
                         type="button"
-                        onClick={() => handleDeleteAdminItem('partnerInquiries', p.id)}
+                        onClick={() => handleDeleteAdminItem('partners', p.id)}
                         className="p-1 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded cursor-pointer shrink-0"
                         aria-label="Delete"
                       >
@@ -276,14 +419,14 @@ export const AboutDeveloperView: React.FC<AboutDeveloperViewProps> = ({
               <h3 className="text-xs font-bold text-slate-900 dark:text-white flex items-center justify-between">
                 <span>{t.developer.contactTitle}</span>
                 <span className="tabular-nums text-sky-700 dark:text-sky-400">
-                  {adminMessages.length}
+                  {adminInquiries.messages.length}
                 </span>
               </h3>
-              {adminMessages.length === 0 ? (
+              {adminInquiries.messages.length === 0 ? (
                 <p className="text-xs text-slate-500 dark:text-slate-400">—</p>
               ) : (
                 <div className="space-y-2.5 max-h-60 overflow-y-auto">
-                  {adminMessages.map((m) => (
+                  {adminInquiries.messages.map((m) => (
                     <div
                       key={m.id}
                       className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 text-xs flex items-start justify-between gap-2"
@@ -298,7 +441,7 @@ export const AboutDeveloperView: React.FC<AboutDeveloperViewProps> = ({
                       </div>
                       <button
                         type="button"
-                        onClick={() => handleDeleteAdminItem('contactMessages', m.id)}
+                        onClick={() => handleDeleteAdminItem('messages', m.id)}
                         className="p-1 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/50 rounded cursor-pointer shrink-0"
                         aria-label="Delete"
                       >
@@ -365,7 +508,7 @@ export const AboutDeveloperView: React.FC<AboutDeveloperViewProps> = ({
         </div>
       </div>
 
-      {/* Story & Contact Info */}
+      {/* Story & Privacy-Protected Support Channels */}
       <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 sm:p-10 border border-slate-200 dark:border-slate-800 space-y-6">
         <h2 className="font-editorial text-2xl font-bold text-slate-900 dark:text-white">
           {t.developer.pageTitle}
@@ -385,21 +528,34 @@ export const AboutDeveloperView: React.FC<AboutDeveloperViewProps> = ({
               <p className="text-xs text-slate-500 dark:text-slate-400 font-semibold">
                 {t.developer.emailLabel}
               </p>
-              <a
-                href={`mailto:${t.developer.email}`}
-                className="text-sm sm:text-base font-bold text-slate-900 dark:text-white hover:underline"
-              >
+              <p className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
                 {t.developer.email}
-              </a>
+              </p>
             </div>
           </div>
 
-          <a
-            href={`mailto:${t.developer.email}?subject=Inquiry%20regarding%20AEGEA%20Smart%20Guide`}
-            className="px-4 py-2 rounded-lg bg-sky-700 hover:bg-sky-800 text-white font-semibold text-xs whitespace-nowrap transition-colors"
-          >
-            {t.developer.sendDirectEmail}
-          </a>
+          <div className="flex flex-wrap items-center gap-2">
+            <a
+              href={whatsappUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs whitespace-nowrap inline-flex items-center gap-1.5 transition-colors"
+            >
+              <MessageCircle className="w-3.5 h-3.5" />
+              <span>{t.auth.subscribeWhatsappBtn}</span>
+            </a>
+
+            <button
+              type="button"
+              onClick={() => {
+                const el = document.getElementById('direct-contact-form');
+                if (el) el.scrollIntoView({ behavior: 'smooth' });
+              }}
+              className="px-4 py-2 rounded-lg bg-sky-700 hover:bg-sky-800 text-white font-semibold text-xs whitespace-nowrap transition-colors cursor-pointer"
+            >
+              {t.developer.sendDirectEmail}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -531,8 +687,11 @@ export const AboutDeveloperView: React.FC<AboutDeveloperViewProps> = ({
         )}
       </div>
 
-      {/* Contact Form */}
-      <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 sm:p-10 border border-slate-200 dark:border-slate-800 space-y-6">
+      {/* Secure Direct Contact Form */}
+      <div
+        id="direct-contact-form"
+        className="bg-white dark:bg-slate-900 rounded-2xl p-6 sm:p-10 border border-slate-200 dark:border-slate-800 space-y-6"
+      >
         <div>
           <h2 className="font-editorial text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
             <Globe2 className="w-5 h-5 text-sky-700 dark:text-sky-400" />
@@ -609,6 +768,19 @@ export const AboutDeveloperView: React.FC<AboutDeveloperViewProps> = ({
           </form>
         )}
       </div>
+
+      {!user?.isAdmin && onOpenAdminLogin && (
+        <div className="flex justify-center pt-2">
+          <button
+            type="button"
+            onClick={onOpenAdminLogin}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+          >
+            <Lock className="w-3 h-3" />
+            <span>{t.auth.adminTabLabel}</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 };

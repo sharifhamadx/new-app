@@ -1,13 +1,28 @@
 import React, { useState } from 'react';
 import { Language, User, SubscriptionPlan } from '../types';
 import { useUiTranslation } from '../hooks/useTranslatedContent';
-import { X, Crown, CheckCircle2, Check, Zap, AlertCircle, Compass } from 'lucide-react';
+import { apiUrl } from '../utils/apiBase';
+import { redeemActivationCode } from '../utils/sessionClient';
+import {
+  X,
+  Crown,
+  CheckCircle2,
+  Check,
+  AlertCircle,
+  Compass,
+  KeyRound,
+  MessageCircle,
+  Loader2,
+  CheckSquare,
+  Square,
+} from 'lucide-react';
 
 interface PremiumModalProps {
   isOpen: boolean;
   onClose: () => void;
   user: User | null;
-  onUpgradeSuccess: (plan: SubscriptionPlan) => Promise<void>;
+  onSessionUpdated?: (user: User, adminSetupRequired: boolean) => void;
+  onOpenTerms?: () => void;
   currentLang: Language;
 }
 
@@ -15,10 +30,13 @@ export const PremiumModal: React.FC<PremiumModalProps> = ({
   isOpen,
   onClose,
   user,
-  onUpgradeSuccess,
+  onSessionUpdated,
+  onOpenTerms,
   currentLang,
 }) => {
   const [selectedPlan, setSelectedPlan] = useState<SubscriptionPlan>('weekly_pass');
+  const [activationCode, setActivationCode] = useState('');
+  const [termsAgreed, setTermsAgreed] = useState<boolean>(Boolean(user?.termsAccepted));
   const [processing, setProcessing] = useState(false);
   const [success, setSuccess] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -26,22 +44,9 @@ export const PremiumModal: React.FC<PremiumModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleSubscribe = async () => {
-    setProcessing(true);
-    setErrorMsg(null);
-    try {
-      await onUpgradeSuccess(selectedPlan);
-      setSuccess(true);
-      setTimeout(() => {
-        setSuccess(false);
-        onClose();
-      }, 1000);
-    } catch (err: any) {
-      setErrorMsg(err?.message || 'Could not update subscription. Please try again.');
-    } finally {
-      setProcessing(false);
-    }
-  };
+  const whatsappSubscribeUrl = apiUrl(
+    `/api/subscribe-whatsapp?plan=${encodeURIComponent(selectedPlan)}&lang=${encodeURIComponent(currentLang)}`
+  );
 
   const confirmText =
     selectedPlan === 'weekly_pass'
@@ -49,6 +54,37 @@ export const PremiumModal: React.FC<PremiumModalProps> = ({
       : selectedPlan === 'monthly'
       ? t.monetization.confirmMonthlyPlan
       : t.monetization.confirmAnnualPlan;
+
+  const handleActivateCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!termsAgreed) {
+      setErrorMsg(t.auth.agreementRequiredNotice);
+      return;
+    }
+    if (!activationCode.trim()) {
+      setErrorMsg(t.auth.signInGenericError);
+      return;
+    }
+
+    setProcessing(true);
+    setErrorMsg(null);
+    try {
+      const res = await redeemActivationCode(activationCode.trim(), true);
+      setSuccess(true);
+      setActivationCode('');
+      if (onSessionUpdated) {
+        onSessionUpdated(res.user, res.adminSetupRequired);
+      }
+      setTimeout(() => {
+        setSuccess(false);
+        onClose();
+      }, 950);
+    } catch (err: any) {
+      setErrorMsg(err?.message || t.auth.signInGenericError);
+    } finally {
+      setProcessing(false);
+    }
+  };
 
   return (
     <div
@@ -79,7 +115,7 @@ export const PremiumModal: React.FC<PremiumModalProps> = ({
         </div>
 
         {/* Body */}
-        <div className="p-6 space-y-5">
+        <div className="p-6 space-y-5 max-h-[82vh] overflow-y-auto">
           {user?.isAdmin && (
             <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200 text-xs space-y-1">
               <p className="font-bold">{t.auth.adminBadge}</p>
@@ -94,7 +130,7 @@ export const PremiumModal: React.FC<PremiumModalProps> = ({
             </div>
           )}
 
-          {/* 3-Tier Revenue Strategy: 7-Day Pass (€9.99) + Monthly VIP (€5) + Annual VIP (€50) */}
+          {/* 3-Tier Plans */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <button
               type="button"
@@ -224,23 +260,83 @@ export const PremiumModal: React.FC<PremiumModalProps> = ({
             ))}
           </div>
 
+          {/* Primary WhatsApp Subscription Link (never exposes phone number) */}
+          <a
+            href={whatsappSubscribeUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="w-full py-3.5 px-6 rounded-xl font-bold text-sm bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center gap-2 transition-colors"
+          >
+            <MessageCircle className="w-4 h-4 shrink-0" />
+            <span>{confirmText}</span>
+          </a>
+
+          {/* Inline Activation Code Entry */}
           {success ? (
             <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-center font-bold text-sm flex items-center justify-center gap-2">
               <CheckCircle2 className="w-5 h-5 text-emerald-600" />
               <span>{t.monetization.paymentSuccess}</span>
             </div>
           ) : (
-            <button
-              type="button"
-              disabled={processing}
-              onClick={handleSubscribe}
-              className="w-full py-3.5 px-6 rounded-xl font-bold text-sm bg-amber-600 hover:bg-amber-700 text-white flex items-center justify-center gap-2 transition-colors cursor-pointer"
+            <form
+              onSubmit={handleActivateCode}
+              className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-3"
             >
-              <Zap className="w-4 h-4" />
-              <span>
-                {processing ? t.monetization.activatingSubscription : confirmText}
-              </span>
-            </button>
+              <p className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                <KeyRound className="w-3.5 h-3.5 text-sky-700 dark:text-sky-400" />
+                <span>{t.auth.orEnterCodeTitle}</span>
+              </p>
+
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  value={activationCode}
+                  onChange={(e) => setActivationCode(e.target.value.toUpperCase())}
+                  placeholder={t.auth.activationCodePlaceholder}
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="flex-1 min-w-0 px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 font-mono text-xs sm:text-sm font-bold tracking-wider text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sky-600"
+                />
+                <button
+                  type="submit"
+                  disabled={processing}
+                  className="px-4 py-2.5 rounded-xl bg-sky-700 hover:bg-sky-800 disabled:opacity-60 text-white text-xs font-bold flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
+                >
+                  {processing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <KeyRound className="w-3.5 h-3.5" />}
+                  <span>{t.auth.activateCodeBtn}</span>
+                </button>
+              </div>
+
+              <div className="flex items-start gap-2 pt-0.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTermsAgreed(!termsAgreed);
+                    setErrorMsg(null);
+                  }}
+                  className="mt-0.5 text-slate-700 dark:text-slate-300 shrink-0 cursor-pointer"
+                  aria-label="Agree to Terms"
+                >
+                  {termsAgreed ? (
+                    <CheckSquare className="w-4 h-4 text-sky-700 dark:text-sky-400" />
+                  ) : (
+                    <Square className="w-4 h-4 text-slate-400" />
+                  )}
+                </button>
+                <span className="text-[11px] text-slate-600 dark:text-slate-300 leading-snug">
+                  {t.auth.termsAgreementCheckbox}{' '}
+                  {onOpenTerms && (
+                    <button
+                      type="button"
+                      onClick={onOpenTerms}
+                      className="underline font-semibold text-sky-700 dark:text-sky-400 cursor-pointer"
+                    >
+                      {t.auth.termsLinkText}
+                    </button>
+                  )}
+                </span>
+              </div>
+            </form>
           )}
 
           <div className="text-center">
