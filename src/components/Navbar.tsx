@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Language, User, ActiveTab, Theme } from '../types';
+import { Language, User, ActiveTab, Theme, HealthProfile } from '../types';
 import {
   SUPPORTED_LANGUAGES,
   getLanguageShortLabel,
@@ -20,6 +20,7 @@ import {
   X,
   Loader2,
   Languages,
+  HeartPulse,
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -35,6 +36,8 @@ interface NavbarProps {
   theme: Theme;
   onToggleTheme: () => void;
   favoritesCount?: number;
+  healthProfile?: HealthProfile;
+  onOpenHealthSettings?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -50,6 +53,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   theme,
   onToggleTheme,
   favoritesCount = 0,
+  healthProfile,
+  onOpenHealthSettings,
 }) => {
   const [langMenuOpen, setLangMenuOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -337,6 +342,27 @@ export const Navbar: React.FC<NavbarProps> = ({
                         </>
                       )}
                     </div>
+
+                    {onOpenHealthSettings && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUserMenuOpen(false);
+                          onOpenHealthSettings();
+                        }}
+                        className="w-full flex items-center justify-between gap-2 py-2.5 px-3 rounded-xl bg-emerald-50/80 dark:bg-emerald-950/30 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 border border-emerald-200 dark:border-emerald-800 text-xs font-bold text-emerald-900 dark:text-emerald-200 transition-colors cursor-pointer"
+                      >
+                        <span className="inline-flex items-center gap-2 truncate">
+                          <HeartPulse className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                          <span className="truncate">{t.healthProfile?.menuBtn || 'Health & Dietary Profile'}</span>
+                        </span>
+                        {((healthProfile?.conditions?.length || 0) + (healthProfile?.allergiesOrNotes ? 1 : 0)) > 0 && (
+                          <span className="px-1.5 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-bold tabular-nums shrink-0">
+                            {(healthProfile?.conditions?.length || 0) + (healthProfile?.allergiesOrNotes ? 1 : 0)}
+                          </span>
+                        )}
+                      </button>
+                    )}
 
                     {(user.isPremium || user.isAdmin) && (
                       <button

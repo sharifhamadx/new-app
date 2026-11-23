@@ -12,6 +12,25 @@ export type AtmospherePreference =
   | 'lively'
   | 'historic';
 
+export type HealthConditionId =
+  | 'diabetes'
+  | 'hypertension'
+  | 'heart_healthy'
+  | 'celiac_gluten_free'
+  | 'lactose_free'
+  | 'nut_allergy'
+  | 'seafood_allergy'
+  | 'vegetarian'
+  | 'halal'
+  | 'mobility_accessible'
+  | 'low_impact';
+
+export interface HealthProfile {
+  conditions: HealthConditionId[];
+  allergiesOrNotes: string;
+  updatedAt?: string;
+}
+
 export interface User {
   uid: string;
   name: string;
@@ -25,6 +44,7 @@ export interface User {
   subscriptionPlan?: 'free' | SubscriptionPlan;
   planExpiresAt?: string | null;
   codeHint?: string | null;
+  healthProfile?: HealthProfile;
 }
 
 export interface TavernaRecommendation {
@@ -174,6 +194,7 @@ export interface MatchmakerResult {
   localPhrases: LocalPhrase[];
   groundingSources?: GroundingSource[];
   searchedAt?: string;
+  healthFitNote?: string;
 }
 
 export interface ItineraryDay {
@@ -271,6 +292,32 @@ export interface VoiceTranslationTurn {
   greekPhonetic: string;
   culturalTip: string;
   timestamp: string;
+}
+
+export interface DailyPicksResult {
+  dateKey: string;
+  displayDate: string;
+  focusCity: string;
+  themeHeadline: string;
+  healthAdaptationSummary: string;
+  culinaryPick: TavernaRecommendation & {
+    featuredDishName?: string;
+    featuredDishGreek?: string;
+    healthFitReason?: string;
+  };
+  dishPick: DishRecommendation & {
+    healthFitReason?: string;
+  };
+  hotelPick: HotelRecommendation & {
+    healthFitReason?: string;
+  };
+  tripPick: HiddenGemSpot & {
+    healthFitReason?: string;
+    tripCity?: string;
+    estimatedDuration?: string;
+  };
+  groundingSources?: GroundingSource[];
+  generatedAt: string;
 }
 
 export type ActiveTab =

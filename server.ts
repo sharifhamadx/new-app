@@ -422,12 +422,78 @@ interface StoredPartnerInquiry {
   createdAt: string;
 }
 
+interface StoredHealthProfile {
+  conditions: string[];
+  allergiesOrNotes: string;
+  updatedAt: string;
+}
+
+const VALID_HEALTH_CONDITIONS = new Set([
+  'diabetes',
+  'hypertension',
+  'heart_healthy',
+  'celiac_gluten_free',
+  'lactose_free',
+  'nut_allergy',
+  'seafood_allergy',
+  'vegetarian',
+  'halal',
+  'mobility_accessible',
+  'low_impact',
+]);
+
+function sanitizeHealthProfile(raw: any): StoredHealthProfile {
+  const rawConditions = Array.isArray(raw?.conditions) ? raw.conditions : [];
+  const cleanConditions = Array.from(
+    new Set(
+      rawConditions
+        .map((c: any) => String(c || '').trim().toLowerCase())
+        .filter((c: string) => VALID_HEALTH_CONDITIONS.has(c))
+    )
+  ).slice(0, 11) as string[];
+  const cleanNotes = String(raw?.allergiesOrNotes || '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .trim()
+    .slice(0, 280);
+  return {
+    conditions: cleanConditions,
+    allergiesOrNotes: cleanNotes,
+    updatedAt: String(raw?.updatedAt || new Date().toISOString()).slice(0, 40),
+  };
+}
+
+function buildHealthPromptBlock(hp: StoredHealthProfile): string {
+  if (!hp || (hp.conditions.length === 0 && !hp.allergiesOrNotes)) {
+    return '';
+  }
+  const rules: Record<string, string> = {
+    diabetes: 'DIABETES / LOW-GLYCEMIC: Strictly avoid sugar-syrup pastries (baklava, loukoumades, kataifi) and sugary drinks; prioritize grilled lean fish/meats, wild greens (horta), legumes, olive-oil vegetable dishes (ladera), and low-glycemic balanced meals.',
+    hypertension: 'HYPERTENSION / LOW-SODIUM: Minimize heavily brined cheeses, cured meats, and salty pickled dishes; prioritize fresh herbs, lemon-olive-oil seasoning (latholemono), grilled fresh produce, and naturally calm restorative environments.',
+    heart_healthy: 'HEART-HEALTHY / MEDITERRANEAN: Emphasize omega-3 rich grilled Aegean fish, extra-virgin olive oil, steamed greens, chickpeas/lentils, whole grains, and avoid heavy fried batters or saturated cream sauces.',
+    celiac_gluten_free: 'STRICT GLUTEN-FREE / CELIAC: Strictly exclude wheat pita, phyllo pies, bread-thickened sauces, and pasta; prioritize naturally gluten-free grilled meats/seafood, horiatiki salad, roasted vegetables, and gluten-free friendly kitchens.',
+    lactose_free: 'LACTOSE / DAIRY-FREE: Exclude feta, tzatziki yogurt, halloumi, and bechamel (moussaka/pastitsio); prioritize olive-oil dishes, grilled fish/meats, lemon-herb salads, and dairy-free Aegean cuisine.',
+    nut_allergy: 'TREE NUT & PEANUT ALLERGY: Strictly avoid walnuts, pistachios, almonds, pine nuts, tahini-nut pastries, and nut-topped desserts; warn clearly about cross-contamination.',
+    seafood_allergy: 'SEAFOOD & SHELLFISH ALLERGY: Strictly exclude all fish, octopus, calamari, shrimp, and seafood platters; focus exclusively on safe land-based tavernas, grilled lamb/chicken souvlaki, roasted vegetables, and herb dishes.',
+    vegetarian: 'VEGETARIAN / PLANT-FORWARD: Recommend meat-free & seafood-free dishes (gemista, briam, fava santorinis, spanakopita, wild horta) and vegetarian-friendly tavernas.',
+    halal: 'HALAL-FRIENDLY: Strictly exclude pork (hirino) and alcohol-cooked dishes; select seafood, lamb/beef/chicken options, vegetarian dishes, and family-friendly alcohol-free pairing drinks (fresh juices, Greek mountain tea, sparkling citrus).',
+    mobility_accessible: 'MOBILITY & ACCESSIBILITY REQUIRED: Prioritize step-free, flat, ground-level or elevator-equipped boutique hotels, waterfront accessible tavernas, and wheelchair/stroller/senior-friendly sightseeing routes without steep cliff staircases.',
+    low_impact: 'LOW-IMPACT / GENTLE PACE: Favor peaceful, uncrowded boutique stays with quiet terraces, relaxed dining without loud nightlife, and gentle short sightseeing walks with shaded seating and minimal physical strain.',
+  };
+
+  const lines = hp.conditions.map((c) => `- ${rules[c] || c}`);
+  if (hp.allergiesOrNotes) {
+    lines.push(`- USER PERSONAL HEALTH / ALLERGY NOTE: "${hp.allergiesOrNotes}"`);
+  }
+  return `\nSTRICT USER HEALTH & WELLNESS PROFILE (MANDATORY TO RESPECT IN EVERY FOOD, HOTEL & TRIP PICK):\n${lines.join('\n')}\nExplain clearly why each dish/place is safe and tailored to this health profile.`;
+}
+
 interface SecurityStore {
   adminPasscodeSalt?: string;
   adminPasscodeHash?: string;
   codes: StoredActivationCode[];
   trials: Record<string, { used: number; updatedAt: number }>;
   ipTrials: Record<string, { used: number; windowStart: number }>;
+  healthProfiles: Record<string, StoredHealthProfile>;
   contactMessages: StoredContactMessage[];
   partnerInquiries: StoredPartnerInquiry[];
 }
@@ -443,6 +509,8 @@ function loadSecurityStore(): SecurityStore {
         codes: Array.isArray(parsed.codes) ? parsed.codes : [],
         trials: parsed.trials && typeof parsed.trials === 'object' ? parsed.trials : {},
         ipTrials: parsed.ipTrials && typeof parsed.ipTrials === 'object' ? parsed.ipTrials : {},
+        healthProfiles:
+          parsed.healthProfiles && typeof parsed.healthProfiles === 'object' ? parsed.healthProfiles : {},
         contactMessages: Array.isArray(parsed.contactMessages) ? parsed.contactMessages : [],
         partnerInquiries: Array.isArray(parsed.partnerInquiries) ? parsed.partnerInquiries : [],
       };
@@ -454,6 +522,7 @@ function loadSecurityStore(): SecurityStore {
     codes: [],
     trials: {},
     ipTrials: {},
+    healthProfiles: {},
     contactMessages: [],
     partnerInquiries: [],
   };
@@ -551,6 +620,13 @@ const aiRecommendLimiter = createRateLimiter({
   maxRequests: 25,
   windowMs: 10 * 60 * 1000,
   message: 'Search rate limit temporarily reached. Please wait a few moments.',
+});
+
+const dailyPicksLimiter = createRateLimiter({
+  prefix: 'daily_picks',
+  maxRequests: 30,
+  windowMs: 15 * 60 * 1000,
+  message: 'Daily picks refresh limit reached. Please wait a moment.',
 });
 
 const translatorLimiter = createRateLimiter({
@@ -768,6 +844,11 @@ function buildPublicSessionUser(session: SessionPayload, clientIp: string) {
   const isAdmin = active.role === 'admin';
   const isPremium = active.role === 'vip' || isAdmin;
   const searchesRemaining = isPremium ? 999999 : getGuestSearchesRemaining(active.trialId, clientIp);
+  const savedHealth = securityStore.healthProfiles?.[active.trialId] || {
+    conditions: [],
+    allergiesOrNotes: '',
+    updatedAt: '',
+  };
 
   return {
     uid: active.sid,
@@ -782,6 +863,7 @@ function buildPublicSessionUser(session: SessionPayload, clientIp: string) {
     subscriptionPlan: active.plan,
     planExpiresAt: active.role === 'vip' ? new Date(active.exp).toISOString() : null,
     codeHint: active.codeHint || null,
+    healthProfile: savedHealth,
   };
 }
 
@@ -893,6 +975,33 @@ app.post('/api/auth/accept-terms', requireSameOriginOrHeader, (req: Request, res
   emitSessionCookie(res, token, Math.max(3600, Math.floor((updated.exp - Date.now()) / 1000)));
   return res.json({
     user: buildPublicSessionUser(updated, clientIp),
+    sessionToken: token,
+    adminSetupRequired: !isAdminPasscodeConfigured(),
+  });
+});
+
+// Save Personal Health & Wellness Profile for current session
+app.post('/api/auth/health-profile', requireSameOriginOrHeader, (req: Request, res: Response) => {
+  const clientIp = getClientIp(req);
+  const resolved = resolveSessionFromRequest(req);
+  const current = resolved.session ? validateSessionActive(resolved.session) : mintGuestSession();
+  const token = signSessionToken(current);
+  if (!resolved.session) {
+    emitSessionCookie(res, token, 30 * 24 * 60 * 60);
+  }
+  const cleanHealth = sanitizeHealthProfile({
+    conditions: req.body?.conditions,
+    allergiesOrNotes: req.body?.allergiesOrNotes,
+    updatedAt: new Date().toISOString(),
+  });
+  if (!securityStore.healthProfiles || typeof securityStore.healthProfiles !== 'object') {
+    securityStore.healthProfiles = {};
+  }
+  securityStore.healthProfiles[current.trialId] = cleanHealth;
+  persistSecurityStore();
+  return res.json({
+    healthProfile: cleanHealth,
+    user: buildPublicSessionUser(current, clientIp),
     sessionToken: token,
     adminSetupRequired: !isAdminPasscodeConfigured(),
   });
@@ -1362,6 +1471,7 @@ interface CacheEntry<T> {
 }
 
 const serverRecommendCache = new Map<string, CacheEntry<any>>();
+const serverDailyPicksCache = new Map<string, CacheEntry<any>>();
 const serverTranslateCache = new Map<string, CacheEntry<any>>();
 const serverCityLiveCache = new Map<string, CacheEntry<any>>();
 
@@ -2605,6 +2715,547 @@ const ITINERARY_RESPONSE_SCHEMA = {
 // Cooldown timestamp when Google Search grounding hits a free-tier quota limit
 let searchGroundingCooldownUntil = 0;
 
+const DAILY_GREEK_DESTINATIONS = [
+  'Naxos & Cyclades',
+  'Nafplio & Peloponnese',
+  'Chania, Crete',
+  'Syros, Cyclades',
+  'Thessaloniki',
+  'Volos & Pelion',
+  'Rhodes Old Town',
+  'Corfu',
+  'Milos',
+  'Monemvasia',
+  'Athens & Riviera',
+  'Kefalonia',
+  'Delphi & Arachova',
+  'Paros',
+  'Heraklion, Crete',
+  'Ioannina & Zagori',
+  'Santorini',
+  'Kalamata & Mani',
+  'Meteora & Kalambaka',
+  'Rethymno, Crete',
+  'Hydra & Saronic Islands',
+  'Kavala & Thassos',
+  'Lefkada',
+  'Kos',
+  'Skiathos & Sporades',
+  'Patras & Achaea',
+  'Lesvos & Samos',
+  'Zakynthos',
+  'Agios Nikolaos, Crete',
+  'Parga & Epirus',
+];
+
+function resolveValidDateKey(rawDateKey?: string): string {
+  const now = new Date();
+  const utcToday = now.toISOString().slice(0, 10);
+  const candidate = String(rawDateKey || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(candidate)) return utcToday;
+  const parsed = Date.parse(`${candidate}T12:00:00Z`);
+  if (Number.isNaN(parsed)) return utcToday;
+  const diffDays = Math.abs(parsed - now.getTime()) / (24 * 60 * 60 * 1000);
+  return diffDays <= 1.5 ? candidate : utcToday;
+}
+
+function getDailySeedDestination(dateKey: string): string {
+  let hash = 0;
+  for (let i = 0; i < dateKey.length; i++) {
+    hash = (hash * 31 + dateKey.charCodeAt(i)) >>> 0;
+  }
+  return DAILY_GREEK_DESTINATIONS[hash % DAILY_GREEK_DESTINATIONS.length] || 'Naxos & Cyclades';
+}
+
+const DAILY_PICKS_RESPONSE_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    focusCity: { type: Type.STRING },
+    themeHeadline: { type: Type.STRING },
+    healthAdaptationSummary: { type: Type.STRING },
+    culinaryPick: {
+      type: Type.OBJECT,
+      properties: {
+        id: { type: Type.STRING },
+        name: { type: Type.STRING },
+        englishName: { type: Type.STRING },
+        greekName: { type: Type.STRING },
+        region: { type: Type.STRING },
+        location: { type: Type.STRING },
+        description: { type: Type.STRING },
+        signatureDishes: { type: Type.ARRAY, items: { type: Type.STRING } },
+        featuredDishName: { type: Type.STRING },
+        featuredDishGreek: { type: Type.STRING },
+        atmosphere: { type: Type.STRING },
+        priceLevel: { type: Type.STRING },
+        insiderTip: { type: Type.STRING },
+        rating: { type: Type.NUMBER },
+        operatingStatus: { type: Type.STRING },
+        openingHours: { type: Type.STRING },
+        officialWebsite: { type: Type.STRING },
+        bookingUrl: { type: Type.STRING },
+        healthFitReason: { type: Type.STRING },
+      },
+      required: [
+        'id',
+        'name',
+        'englishName',
+        'greekName',
+        'region',
+        'location',
+        'description',
+        'signatureDishes',
+        'featuredDishName',
+        'featuredDishGreek',
+        'atmosphere',
+        'priceLevel',
+        'insiderTip',
+        'rating',
+        'operatingStatus',
+        'openingHours',
+        'healthFitReason',
+      ],
+    },
+    dishPick: {
+      type: Type.OBJECT,
+      properties: {
+        id: { type: Type.STRING },
+        name: { type: Type.STRING },
+        englishName: { type: Type.STRING },
+        greekName: { type: Type.STRING },
+        pronunciation: { type: Type.STRING },
+        description: { type: Type.STRING },
+        ingredients: { type: Type.ARRAY, items: { type: Type.STRING } },
+        dietary: { type: Type.ARRAY, items: { type: Type.STRING } },
+        regionOfOrigin: { type: Type.STRING },
+        pairingDrink: { type: Type.STRING },
+        healthFitReason: { type: Type.STRING },
+      },
+      required: [
+        'id',
+        'name',
+        'englishName',
+        'greekName',
+        'pronunciation',
+        'description',
+        'ingredients',
+        'dietary',
+        'regionOfOrigin',
+        'pairingDrink',
+        'healthFitReason',
+      ],
+    },
+    hotelPick: {
+      type: Type.OBJECT,
+      properties: {
+        id: { type: Type.STRING },
+        name: { type: Type.STRING },
+        englishName: { type: Type.STRING },
+        greekName: { type: Type.STRING },
+        region: { type: Type.STRING },
+        location: { type: Type.STRING },
+        category: { type: Type.STRING },
+        description: { type: Type.STRING },
+        amenities: { type: Type.ARRAY, items: { type: Type.STRING } },
+        priceLevel: { type: Type.STRING },
+        insiderTip: { type: Type.STRING },
+        rating: { type: Type.NUMBER },
+        operatingStatus: { type: Type.STRING },
+        openingHours: { type: Type.STRING },
+        officialWebsite: { type: Type.STRING },
+        bookingUrl: { type: Type.STRING },
+        healthFitReason: { type: Type.STRING },
+      },
+      required: [
+        'id',
+        'name',
+        'englishName',
+        'greekName',
+        'region',
+        'location',
+        'category',
+        'description',
+        'amenities',
+        'priceLevel',
+        'insiderTip',
+        'rating',
+        'operatingStatus',
+        'openingHours',
+        'healthFitReason',
+      ],
+    },
+    tripPick: {
+      type: Type.OBJECT,
+      properties: {
+        id: { type: Type.STRING },
+        title: { type: Type.STRING },
+        englishName: { type: Type.STRING },
+        greekTitle: { type: Type.STRING },
+        region: { type: Type.STRING },
+        tripCity: { type: Type.STRING },
+        description: { type: Type.STRING },
+        whyVisit: { type: Type.STRING },
+        bestTimeToVisit: { type: Type.STRING },
+        estimatedDuration: { type: Type.STRING },
+        nearbyTavernaSuggestion: { type: Type.STRING },
+        operatingStatus: { type: Type.STRING },
+        openingHours: { type: Type.STRING },
+        officialWebsite: { type: Type.STRING },
+        bookingUrl: { type: Type.STRING },
+        healthFitReason: { type: Type.STRING },
+      },
+      required: [
+        'id',
+        'title',
+        'englishName',
+        'greekTitle',
+        'region',
+        'tripCity',
+        'description',
+        'whyVisit',
+        'bestTimeToVisit',
+        'estimatedDuration',
+        'nearbyTavernaSuggestion',
+        'operatingStatus',
+        'openingHours',
+        'healthFitReason',
+      ],
+    },
+  },
+  required: [
+    'focusCity',
+    'themeHeadline',
+    'healthAdaptationSummary',
+    'culinaryPick',
+    'dishPick',
+    'hotelPick',
+    'tripPick',
+  ],
+};
+
+// Real Gemini-Powered Daily Rotating Suggestions (1 Food Experience + 1 Dish + 1 Hotel + 1 Trip per Date + Health Profile)
+app.post('/api/daily-picks', dailyPicksLimiter, requireSameOriginOrHeader, async (req: Request, res: Response) => {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return res.status(503).json({
+      error: 'Gemini AI service key is not configured on the server. Add GEMINI_API_KEY in Settings > Secrets.',
+    });
+  }
+
+  const resolved = resolveSessionFromRequest(req);
+  const activeSession = resolved.session ? validateSessionActive(resolved.session) : null;
+  const sessionSavedHealth = activeSession?.trialId
+    ? securityStore.healthProfiles?.[activeSession.trialId]
+    : undefined;
+
+  const incomingHealth = req.body?.healthProfile ? sanitizeHealthProfile(req.body.healthProfile) : null;
+  const effectiveHealth: StoredHealthProfile =
+    incomingHealth && (incomingHealth.conditions.length > 0 || incomingHealth.allergiesOrNotes)
+      ? incomingHealth
+      : sessionSavedHealth || { conditions: [], allergiesOrNotes: '', updatedAt: '' };
+
+  const dateKey = resolveValidDateKey(req.body?.dateKey);
+  const langName = resolveLanguageName(req.body?.language || 'en');
+  const seedDestination = getDailySeedDestination(dateKey);
+
+  const healthHash = crypto
+    .createHash('sha256')
+    .update(JSON.stringify({ c: [...effectiveHealth.conditions].sort(), n: effectiveHealth.allergiesOrNotes }))
+    .digest('hex')
+    .slice(0, 16);
+
+  const dailyCacheKey = makeCacheKey({ dateKey, langName, healthHash });
+  const cachedDaily = getFromTtlCache(serverDailyPicksCache, dailyCacheKey);
+  if (cachedDaily) {
+    return res.json(cachedDaily);
+  }
+
+  const dateObj = new Date(`${dateKey}T12:00:00Z`);
+  const displayDate = dateObj.toLocaleDateString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
+  const healthPromptBlock = buildHealthPromptBlock(effectiveHealth);
+  const ai = createServerGeminiClient(apiKey, 'v1beta', 24000);
+  const startMs = Date.now();
+  const groundingSources: { title: string; uri: string }[] = [];
+
+  const liveCtx = await gatherLiveWebGrounding({
+    city: seedDestination,
+    foodType: effectiveHealth.conditions.join(' ') || 'Traditional Greek Cuisine',
+    atmosphere: '',
+    prompt: effectiveHealth.allergiesOrNotes || '',
+  }).catch(() => ({ liveDining: [], liveHotels: [], liveSites: [], liveSources: [], contextDigest: '' }));
+
+  const baseDailyPrompt = `Today's exact calendar date is ${dateKey} (${displayDate}).
+Generate TODAY'S EXCLUSIVE SINGLE DAILY CURATED GREECE SPOTLIGHT featuring ONE pick of each category for ${seedDestination} (or an authentic nearby Greek island/town suited to today's season on ${dateKey}):
+- ONE real currently open Restaurant / Taverna experience ("culinaryPick") with a signature dish suited to today
+- ONE distinct authentic Greek Dish to taste today ("dishPick")
+- ONE real Boutique Hotel / Stay ("hotelPick")
+- ONE unique Day Trip / Cultural Excursion / Scenic Gem ("tripPick")
+
+Required Output Language: ${langName}.
+${healthPromptBlock || '\nHEALTH & WELLNESS CONTEXT: No specific medical condition set; suggest balanced, wholesome authentic Mediterranean dining, comfortable stay, and an enriching Greek experience.'}
+
+LIVE DIRECTORY CONTEXT:
+${liveCtx.contextDigest || `Focus exclusively on verified currently open places in ${seedDestination}, Greece.`}
+
+CRITICAL RULES:
+1. Date uniqueness: Tie "themeHeadline" naturally to today's date (${dateKey}) and make every selection distinct to ${seedDestination} (do not reuse generic Athens defaults unless ${seedDestination} is Athens).
+2. Return ONLY ONE item in culinaryPick, ONE in dishPick, ONE in hotelPick, and ONE in tripPick.
+3. Keep "englishName" in clean Latin/English characters for every pick, keep "greekName" / "greekTitle" in genuine Greek script, and write ALL descriptive strings (including "healthFitReason" and "healthAdaptationSummary") in fluent, natural ${langName}.
+4. Every venue/hotel/trip must be real, currently active in ${dateObj.getUTCFullYear()}, and safe/tailored to the Health Profile above. Never invent fake URLs (use verified https://... URL or "").
+5. Respond with ONLY valid JSON matching the requested schema.`;
+
+  let rawText = '';
+  let parsed: any = null;
+
+  if (Date.now() >= searchGroundingCooldownUntil) {
+    const groundedModels = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'].filter((m) => isModelAvailable(m));
+    for (const gModel of groundedModels) {
+      try {
+        const cfg: any = { tools: [{ googleSearch: {} }] };
+        if (gModel === 'gemini-4-hydrogen') {
+          cfg.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
+        }
+        const gRes = await withPromiseTimeout(
+          ai.models.generateContent({
+            model: gModel,
+            contents: baseDailyPrompt,
+            config: cfg,
+          }),
+          11000,
+          `daily-grounding-${gModel}`
+        );
+        rawText = gRes.text || '';
+        const chunks = gRes.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+        const seenUris = new Set<string>();
+        for (const chunk of chunks as any[]) {
+          const uri = chunk?.web?.uri;
+          const title = chunk?.web?.title;
+          if (uri && !seenUris.has(uri)) {
+            seenUris.add(uri);
+            groundingSources.push({ title: title || uri, uri });
+          }
+        }
+        if (rawText.trim()) break;
+      } catch (err: any) {
+        if (isQuotaError(err)) {
+          searchGroundingCooldownUntil = Date.now() + 15 * 60 * 1000;
+        } else if (isTransientRetryableError(err)) {
+          break;
+        }
+      }
+    }
+  }
+
+  if (rawText) {
+    try {
+      parsed = extractAndParseJSON(rawText);
+    } catch {
+      try {
+        const structured = await callGeminiWithFallback(ai, {
+          models: ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'],
+          contents: `Convert this daily Greece recommendation JSON/text into strict valid JSON matching the schema in fluent ${langName}:\n\n${rawText}`,
+          responseSchema: DAILY_PICKS_RESPONSE_SCHEMA,
+          maxPasses: 1,
+          totalBudgetMs: 11000,
+        });
+        parsed = extractAndParseJSON(structured.text || '{}');
+      } catch {
+        parsed = null;
+      }
+    }
+  }
+
+  if (!parsed || !parsed.culinaryPick || !parsed.hotelPick || !parsed.tripPick || !parsed.dishPick) {
+    try {
+      const fallbackRes = await callGeminiWithFallback(ai, {
+        models: ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'],
+        contents: baseDailyPrompt,
+        responseSchema: DAILY_PICKS_RESPONSE_SCHEMA,
+        maxPasses: 1,
+        totalBudgetMs: Math.max(12000, 22000 - (Date.now() - startMs)),
+        perAttemptTimeoutMs: 16000,
+      });
+      parsed = extractAndParseJSON(fallbackRes.text || '{}');
+    } catch (err: any) {
+      return res.status(isQuotaError(err) ? 429 : 503).json({
+        error: formatGeminiErrorMessage(
+          err,
+          'Could not generate today’s AI curated picks right now. Please try again in a moment.'
+        ),
+      });
+    }
+  }
+
+  if (!parsed?.culinaryPick || !parsed?.hotelPick || !parsed?.tripPick || !parsed?.dishPick) {
+    return res.status(503).json({
+      error: 'AI daily picks response was incomplete. Please refresh to try again.',
+    });
+  }
+
+  // Ensure correct target language if model slipped into English
+  const sampleDailyDesc = String(parsed.culinaryPick?.description || '');
+  const needsTx =
+    (langName.toLowerCase() === 'arabic' && !/[\u0600-\u06FF]/.test(sampleDailyDesc)) ||
+    (langName.toLowerCase() === 'greek' && !/[\u0370-\u03FF\u1F00-\u1FFF]/.test(sampleDailyDesc));
+  if (needsTx && Date.now() - startMs < 19000) {
+    try {
+      const txRes = await callGeminiWithFallback(ai, {
+        models: ['gemini-3.1-flash-lite', 'gemini-4-hydrogen'],
+        contents: `Translate ALL human-readable fields ("focusCity", "themeHeadline", "healthAdaptationSummary", "name", "title", "region", "location", "tripCity", "category", "description", "signatureDishes", "featuredDishName", "atmosphere", "insiderTip", "operatingStatus", "openingHours", "amenities", "ingredients", "dietary", "regionOfOrigin", "pairingDrink", "whyVisit", "bestTimeToVisit", "estimatedDuration", "nearbyTavernaSuggestion", "healthFitReason") into natural fluent ${langName}. Keep all JSON keys, ids, ratings, priceLevels, "englishName", "greekName", "greekTitle", "featuredDishGreek", "officialWebsite", and "bookingUrl" intact:\n\n${JSON.stringify(parsed)}`,
+        maxPasses: 1,
+        totalBudgetMs: 9000,
+      });
+      const txParsed = extractAndParseJSON(txRes.text || '{}');
+      if (txParsed?.culinaryPick && txParsed?.hotelPick && txParsed?.tripPick) {
+        parsed = { ...parsed, ...txParsed };
+      }
+    } catch {
+      // retain parsed if translation timed out
+    }
+  }
+
+  if (groundingSources.length === 0 && liveCtx.liveSources.length > 0) {
+    groundingSources.push(...liveCtx.liveSources.slice(0, 5));
+  }
+
+  const cityCoord = GREEK_CITY_COORDS[seedDestination] || GREEK_CITY_COORDS['Athens'];
+  const livePool = [...liveCtx.liveDining, ...liveCtx.liveHotels, ...liveCtx.liveSites];
+  const usedUrls = new Set<string>();
+
+  const cSite = sanitizeHttpUrl(parsed.culinaryPick.officialWebsite);
+  const cBook = sanitizeHttpUrl(parsed.culinaryPick.bookingUrl);
+  const hSite = sanitizeHttpUrl(parsed.hotelPick.officialWebsite);
+  const hBook = sanitizeHttpUrl(parsed.hotelPick.bookingUrl);
+  const tSite = sanitizeHttpUrl(parsed.tripPick.officialWebsite);
+  const tBook = sanitizeHttpUrl(parsed.tripPick.bookingUrl);
+
+  const [cImg, cCoords, dImg, hImg, hCoords, tImg, tCoords] = await Promise.all([
+    resolveVerifiedPlaceImageWithBudget({
+      englishName: parsed.culinaryPick.englishName,
+      name: parsed.culinaryPick.name,
+      greekName: parsed.culinaryPick.greekName,
+      region: parsed.culinaryPick.region || seedDestination,
+      officialWebsite: cSite,
+      bookingUrl: cBook,
+      groundingSources,
+      extraContext: 'taverna restaurant',
+      fallbackTopic: 'Greek seaside taverna dining',
+      usedUrls,
+    }),
+    resolvePlaceCoordinatesWithBudget({
+      englishName: parsed.culinaryPick.englishName,
+      name: parsed.culinaryPick.name,
+      region: parsed.culinaryPick.region || seedDestination,
+      cityCoord,
+      livePool,
+    }),
+    resolveVerifiedPlaceImageWithBudget({
+      englishName: parsed.dishPick.englishName,
+      name: parsed.dishPick.name,
+      greekName: parsed.dishPick.greekName,
+      groundingSources,
+      extraContext: 'Greek dish food',
+      isDish: true,
+      usedUrls,
+    }),
+    resolveVerifiedPlaceImageWithBudget({
+      englishName: parsed.hotelPick.englishName,
+      name: parsed.hotelPick.name,
+      greekName: parsed.hotelPick.greekName,
+      region: parsed.hotelPick.region || seedDestination,
+      officialWebsite: hSite,
+      bookingUrl: hBook,
+      groundingSources,
+      extraContext: 'hotel boutique',
+      fallbackTopic: 'Greek boutique hotel Aegean',
+      usedUrls,
+    }),
+    resolvePlaceCoordinatesWithBudget({
+      englishName: parsed.hotelPick.englishName,
+      name: parsed.hotelPick.name,
+      region: parsed.hotelPick.region || seedDestination,
+      cityCoord,
+      livePool,
+    }),
+    resolveVerifiedPlaceImageWithBudget({
+      englishName: parsed.tripPick.englishName,
+      name: parsed.tripPick.title,
+      greekName: parsed.tripPick.greekTitle,
+      region: parsed.tripPick.tripCity || parsed.tripPick.region || seedDestination,
+      officialWebsite: tSite,
+      bookingUrl: tBook,
+      groundingSources,
+      fallbackTopic: 'Greece Aegean island landmark scenic',
+      usedUrls,
+    }),
+    resolvePlaceCoordinatesWithBudget({
+      englishName: parsed.tripPick.englishName,
+      name: parsed.tripPick.title,
+      region: parsed.tripPick.tripCity || parsed.tripPick.region || seedDestination,
+      cityCoord,
+      livePool,
+    }),
+  ]);
+
+  const payload = {
+    dateKey,
+    displayDate,
+    focusCity: parsed.focusCity || seedDestination,
+    themeHeadline: parsed.themeHeadline || '',
+    healthAdaptationSummary: parsed.healthAdaptationSummary || '',
+    culinaryPick: {
+      ...parsed.culinaryPick,
+      id: parsed.culinaryPick.id || `daily-c-${dateKey}`,
+      priceLevel:
+        parsed.culinaryPick.priceLevel === '€' || parsed.culinaryPick.priceLevel === '€€€'
+          ? parsed.culinaryPick.priceLevel
+          : '€€',
+      rating: typeof parsed.culinaryPick.rating === 'number' ? parsed.culinaryPick.rating : 4.8,
+      officialWebsite: cSite,
+      bookingUrl: cBook,
+      imageUrl: cImg,
+      coordinates: cCoords,
+    },
+    dishPick: {
+      ...parsed.dishPick,
+      id: parsed.dishPick.id || `daily-d-${dateKey}`,
+      imageUrl: dImg,
+    },
+    hotelPick: {
+      ...parsed.hotelPick,
+      id: parsed.hotelPick.id || `daily-h-${dateKey}`,
+      priceLevel:
+        parsed.hotelPick.priceLevel === '€' || parsed.hotelPick.priceLevel === '€€€'
+          ? parsed.hotelPick.priceLevel
+          : '€€',
+      rating: typeof parsed.hotelPick.rating === 'number' ? parsed.hotelPick.rating : 4.8,
+      officialWebsite: hSite,
+      bookingUrl: hBook,
+      imageUrl: hImg,
+      coordinates: hCoords,
+    },
+    tripPick: {
+      ...parsed.tripPick,
+      id: parsed.tripPick.id || `daily-t-${dateKey}`,
+      officialWebsite: tSite,
+      bookingUrl: tBook,
+      imageUrl: tImg,
+      coordinates: tCoords,
+    },
+    groundingSources,
+    generatedAt: new Date().toISOString(),
+  };
+
+  setInTtlCache(serverDailyPicksCache, dailyCacheKey, payload, 24 * 60 * 60 * 1000, 120);
+  return res.json(payload);
+});
+
 // Real Live Google-Search Grounded AI Recommendation Endpoint (Guest 2 Free Trial + VIP Activation Codes)
 app.post('/api/recommend', aiRecommendLimiter, requireSameOriginOrHeader, async (req: Request, res: Response) => {
   const clientIp = getClientIp(req);
@@ -2639,7 +3290,16 @@ app.post('/api/recommend', aiRecommendLimiter, requireSameOriginOrHeader, async 
     mood = '',
     region = '',
     dietary = '',
+    healthProfile: rawBodyHealth,
   } = req.body || {};
+
+  const sessionHealth = securityStore.healthProfiles?.[activeSession.trialId];
+  const bodyHealth = rawBodyHealth ? sanitizeHealthProfile(rawBodyHealth) : null;
+  const effectiveHealth: StoredHealthProfile =
+    bodyHealth && (bodyHealth.conditions.length > 0 || bodyHealth.allergiesOrNotes)
+      ? bodyHealth
+      : sessionHealth || { conditions: [], allergiesOrNotes: '', updatedAt: '' };
+  const healthPromptBlock = buildHealthPromptBlock(effectiveHealth);
 
   const targetCity = city || region || 'Athens & Iconic Greek Destinations';
   const targetFood = foodType || dietary || 'Authentic Traditional Greek Cuisine';
@@ -2677,6 +3337,10 @@ app.post('/api/recommend', aiRecommendLimiter, requireSameOriginOrHeader, async 
     guideCategory: String(guideCategory).trim().toLowerCase(),
     freshOnly: Boolean(freshOnly),
     prompt: String(prompt || '').trim().toLowerCase(),
+    health: {
+      c: [...effectiveHealth.conditions].sort(),
+      n: effectiveHealth.allergiesOrNotes,
+    },
     langName,
   });
 
@@ -2723,6 +3387,7 @@ Use Google Search right now to build a comprehensive, real-world travel & culina
 - Guide Focus Mode: "${targetFocus}"
 - Additional Traveler Notes: "${prompt || 'None'}"
 - Required Output Language: ${langName}
+${healthPromptBlock}
 
 CRITICAL RULES:
 1. ${freshnessRule}
@@ -2837,6 +3502,7 @@ Generate a comprehensive, real-world Greek travel & culinary reference guide tai
 - Guide Focus Mode: "${targetFocus}"
 - Additional Traveler Notes: "${prompt || 'None'}"
 - Required Output Language: ${langName}
+${healthPromptBlock}
 
 LIVE INTERNET DIRECTORY & GEOGRAPHY DATA VERIFIED RIGHT NOW:
 ${liveWebCtx.contextDigest || `Focus exclusively on verified currently open places in ${targetCity}, Greece.`}
@@ -3325,10 +3991,18 @@ app.post('/api/itinerary', aiRecommendLimiter, requireSameOriginOrHeader, async 
     });
   }
 
-  const { city = 'Athens', foodType = 'Traditional Greek Cuisine', language = 'en', guideResult } = req.body || {};
+  const { city = 'Athens', foodType = 'Traditional Greek Cuisine', language = 'en', guideResult, healthProfile: rawItinHealth } = req.body || {};
   if (!guideResult) {
     return res.status(400).json({ error: 'Search results are required to generate a 3-day itinerary.' });
   }
+
+  const sessionHealth = securityStore.healthProfiles?.[activeSession.trialId];
+  const bodyItinHealth = rawItinHealth ? sanitizeHealthProfile(rawItinHealth) : null;
+  const effectiveHealth =
+    bodyItinHealth && (bodyItinHealth.conditions.length > 0 || bodyItinHealth.allergiesOrNotes)
+      ? bodyItinHealth
+      : sessionHealth || { conditions: [], allergiesOrNotes: '', updatedAt: '' };
+  const healthPromptBlock = buildHealthPromptBlock(effectiveHealth);
 
   const apiKey = process.env.GEMINI_API_KEY;
   const langName = resolveLanguageName(language);
@@ -3348,6 +4022,7 @@ app.post('/api/itinerary', aiRecommendLimiter, requireSameOriginOrHeader, async 
       const prompt = `Create a cohesive, practical 3-Day VIP Travel, Culinary & Archaeological Itinerary for "${city}" tailored to "${foodType}".
 Use the verified top-ranked places from these search results:
 ${JSON.stringify(condensedContext)}
+${healthPromptBlock}
 
 Requirements:
 - Write EVERY single text field in fluent, natural ${langName}.

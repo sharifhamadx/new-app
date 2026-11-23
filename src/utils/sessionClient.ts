@@ -1,4 +1,4 @@
-import { SubscriptionPlan, User } from '../types';
+import { DailyPicksResult, HealthProfile, SubscriptionPlan, User } from '../types';
 import { apiUrl } from './apiBase';
 
 // Strict in-memory token store (never saved to localStorage or sessionStorage)
@@ -255,4 +255,103 @@ export async function adminDeleteInquiry(type: 'partners' | 'messages', id: stri
   if (!res.ok) {
     throw new Error(data?.error || 'Could not delete item.');
   }
+}
+
+export async function saveHealthProfileSession(
+  healthProfile: HealthProfile
+): Promise<{ healthProfile: HealthProfile; user: User; adminSetupRequired: boolean }> {
+  const res = await apiFetch('/api/auth/health-profile', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(healthProfile),
+  });
+  const data = await parseJsonSafe(res);
+  if (!res.ok || !data?.user) {
+    throw new Error(data?.error || 'Could not save health profile.');
+  }
+  if (data.sessionToken) {
+    setInMemorySessionToken(data.sessionToken);
+  }
+  return {
+    healthProfile: data.healthProfile || healthProfile,
+    user: data.user,
+    adminSetupRequired: Boolean(data.adminSetupRequired),
+  };
+}
+
+const dailyPicksInflight = new Map<string, Promise<DailyPicksResult>>();
+const DAILY_PICKS_CACHE_STORAGE = 'aegea_daily_picks_v1';
+
+export function getTodayLocalDateKey(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+export function makeDailyPicksCacheKey(dateKey: string, language: string, hp?: HealthProfile): string {
+  const conds = [...(hp?.conditions || [])].sort().join(',');
+  const notes = String(hp?.allergiesOrNotes || '').trim().toLowerCase();
+  return `${dateKey}|${String(language || 'en').trim().toLowerCase()}|${conds}|${notes}`;
+}
+
+export function getCachedDailyPicks(dateKey: string, language: string, hp?: HealthProfile): DailyPicksResult | null {
+  try {
+    const raw = localStorage.getItem(DAILY_PICKS_CACHE_STORAGE);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const key = makeDailyPicksCacheKey(dateKey, language, hp);
+    if (parsed?.key === key && parsed?.data?.culinaryPick && parsed?.data?.hotelPick && parsed?.data?.tripPick) {
+      return parsed.data as DailyPicksResult;
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return null;
+}
+
+export async function fetchDailyAiPicks(params: {
+  language: string;
+  healthProfile?: HealthProfile;
+  forceRefresh?: boolean;
+}): Promise<DailyPicksResult> {
+  const dateKey = getTodayLocalDateKey();
+  const hp = params.healthProfile || { conditions: [], allergiesOrNotes: '' };
+  const key = makeDailyPicksCacheKey(dateKey, params.language, hp);
+
+  if (!params.forceRefresh) {
+    const cached = getCachedDailyPicks(dateKey, params.language, hp);
+    if (cached) return cached;
+  }
+
+  const existing = dailyPicksInflight.get(key);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    const res = await apiFetch('/api/daily-picks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        dateKey,
+        language: params.language,
+        healthProfile: hp,
+      }),
+    });
+    const data = await parseJsonSafe(res);
+    if (!res.ok || !data?.culinaryPick || !data?.hotelPick || !data?.tripPick) {
+      throw new Error(data?.error || 'Could not load today’s AI curated picks.');
+    }
+    try {
+      localStorage.setItem(DAILY_PICKS_CACHE_STORAGE, JSON.stringify({ key, data }));
+    } catch {
+      // ignore storage quota errors
+    }
+    return data as DailyPicksResult;
+  })().finally(() => {
+    dailyPicksInflight.delete(key);
+  });
+
+  dailyPicksInflight.set(key, promise);
+  return promise;
 }

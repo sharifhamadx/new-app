@@ -5,6 +5,7 @@ import {
   ActiveTab,
   Theme,
   FavoriteItem,
+  HealthProfile,
 } from './types';
 import {
   fetchSessionState,
@@ -25,9 +26,28 @@ import { PremiumModal } from './components/PremiumModal';
 import { Footer } from './components/Footer';
 import { OfflineIndicator } from './components/PWAInstallBanner';
 import { FloatingWhatsAppButton } from './components/FloatingWhatsAppButton';
+import { HealthProfileModal } from './components/HealthProfileModal';
 import { isRtlLanguage, useUiTranslation } from './hooks/useTranslatedContent';
 
 const FAVORITES_STORAGE_KEY = 'aegea_favorites_v2';
+const HEALTH_PROFILE_STORAGE_KEY = 'aegea_health_profile_v1';
+
+function loadStoredHealthProfile(): HealthProfile {
+  try {
+    const raw = localStorage.getItem(HEALTH_PROFILE_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return {
+        conditions: Array.isArray(parsed?.conditions) ? parsed.conditions : [],
+        allergiesOrNotes: typeof parsed?.allergiesOrNotes === 'string' ? parsed.allergiesOrNotes : '',
+        updatedAt: typeof parsed?.updatedAt === 'string' ? parsed.updatedAt : '',
+      };
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return { conditions: [], allergiesOrNotes: '' };
+}
 
 function makeFavoriteDocId(itemType: string, nameKey: string): string {
   const safe = `${itemType}_${nameKey}`
@@ -70,11 +90,13 @@ export default function App() {
   const [adminSetupRequired, setAdminSetupRequired] = useState(false);
 
   const [favorites, setFavorites] = useState<FavoriteItem[]>(() => loadStoredFavorites());
+  const [healthProfile, setHealthProfile] = useState<HealthProfile>(() => loadStoredHealthProfile());
 
   const [isSignInOpen, setIsSignInOpen] = useState(false);
   const [signInInitialTab, setSignInInitialTab] = useState<'vip' | 'admin'>('vip');
   const [isTermsOpen, setIsTermsOpen] = useState(false);
   const [isPremiumOpen, setIsPremiumOpen] = useState(false);
+  const [isHealthOpen, setIsHealthOpen] = useState(false);
 
   // Sync dark mode class on root HTML
   useEffect(() => {
@@ -113,6 +135,18 @@ export default function App() {
         if (!cancelled) {
           setUser(session.user);
           setAdminSetupRequired(session.adminSetupRequired);
+          const srvHealth = session.user?.healthProfile;
+          if (
+            srvHealth &&
+            (srvHealth.conditions.length > 0 || srvHealth.allergiesOrNotes)
+          ) {
+            setHealthProfile(srvHealth);
+            try {
+              localStorage.setItem(HEALTH_PROFILE_STORAGE_KEY, JSON.stringify(srvHealth));
+            } catch {
+              // ignore storage quota errors
+            }
+          }
         }
       } catch {
         if (!cancelled) {
@@ -144,6 +178,18 @@ export default function App() {
   const handleSessionUpdated = useCallback((nextUser: User, nextAdminSetup: boolean) => {
     setUser(nextUser);
     setAdminSetupRequired(nextAdminSetup);
+  }, []);
+
+  const handleSaveHealthProfile = useCallback((nextProfile: HealthProfile, updatedUser?: User) => {
+    setHealthProfile(nextProfile);
+    try {
+      localStorage.setItem(HEALTH_PROFILE_STORAGE_KEY, JSON.stringify(nextProfile));
+    } catch {
+      // ignore storage quota errors
+    }
+    if (updatedUser) {
+      setUser(updatedUser);
+    }
   }, []);
 
   const handleSignOut = async () => {
@@ -217,6 +263,8 @@ export default function App() {
         theme={theme}
         onToggleTheme={handleToggleTheme}
         favoritesCount={favorites.length}
+        healthProfile={healthProfile}
+        onOpenHealthSettings={() => setIsHealthOpen(true)}
       />
 
       <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 sm:pt-8 w-full">
@@ -237,16 +285,42 @@ export default function App() {
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onSyncUser={(updatedUser) => setUser(updatedUser)}
+            healthProfile={healthProfile}
+            onOpenHealthSettings={() => setIsHealthOpen(true)}
           />
         )}
 
         {activeTab === 'translator' && <LiveTranslatorView currentLang={currentLang} />}
 
-        {activeTab === 'explore' && <ExploreView currentLang={currentLang} />}
+        {activeTab === 'explore' && (
+          <ExploreView
+            currentLang={currentLang}
+            healthProfile={healthProfile}
+            onOpenHealthSettings={() => setIsHealthOpen(true)}
+            favorites={favorites}
+            onToggleFavorite={handleToggleFavorite}
+          />
+        )}
 
-        {activeTab === 'dishes' && <DishesView currentLang={currentLang} />}
+        {activeTab === 'dishes' && (
+          <DishesView
+            currentLang={currentLang}
+            healthProfile={healthProfile}
+            onOpenHealthSettings={() => setIsHealthOpen(true)}
+            favorites={favorites}
+            onToggleFavorite={handleToggleFavorite}
+          />
+        )}
 
-        {activeTab === 'hidden-gems' && <HiddenGemsView currentLang={currentLang} />}
+        {activeTab === 'hidden-gems' && (
+          <HiddenGemsView
+            currentLang={currentLang}
+            healthProfile={healthProfile}
+            onOpenHealthSettings={() => setIsHealthOpen(true)}
+            favorites={favorites}
+            onToggleFavorite={handleToggleFavorite}
+          />
+        )}
 
         {activeTab === 'favorites' && (
           <FavoritesView
@@ -303,6 +377,14 @@ export default function App() {
         onSessionUpdated={handleSessionUpdated}
         onOpenTerms={() => setIsTermsOpen(true)}
         currentLang={currentLang}
+      />
+
+      <HealthProfileModal
+        isOpen={isHealthOpen}
+        onClose={() => setIsHealthOpen(false)}
+        currentLang={currentLang}
+        healthProfile={healthProfile}
+        onSaveHealthProfile={handleSaveHealthProfile}
       />
     </div>
   );

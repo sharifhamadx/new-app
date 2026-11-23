@@ -11,6 +11,7 @@ import {
   FavoriteItem,
   FavoriteItemType,
   CityLiveConditions,
+  HealthProfile,
 } from '../types';
 import {
   useUiTranslation,
@@ -23,6 +24,7 @@ import { apiUrl } from '../utils/apiBase';
 import { PlaceActionLinks } from './PlaceActionLinks';
 import { LiveDestinationConditions } from './LiveDestinationConditions';
 import { InteractiveGreeceMap } from './InteractiveGreeceMap';
+import { DailyPicksSpotlight } from './DailyPicksSpotlight';
 import {
   encodeSharedTripUrl,
   decodeSharedTripFromSearch,
@@ -92,6 +94,8 @@ interface MatchmakerViewProps {
   onSyncUser: (user: User) => void;
   favorites?: FavoriteItem[];
   onToggleFavorite?: (item: Omit<FavoriteItem, 'id' | 'userId' | 'createdAt'>) => Promise<void>;
+  healthProfile?: HealthProfile;
+  onOpenHealthSettings?: () => void;
 }
 
 const RECENT_SEARCHES_STORAGE_KEY = 'aegea_recent_searches_v2';
@@ -198,6 +202,8 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
   onSyncUser,
   favorites = [],
   onToggleFavorite,
+  healthProfile = { conditions: [], allergiesOrNotes: '' },
+  onOpenHealthSettings,
 }) => {
   const [city, setCity] = useState('Athens');
   const [customCity, setCustomCity] = useState('');
@@ -243,6 +249,16 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
 
   const resultCacheRef = useRef<Record<string, MatchmakerResult>>({});
   const itineraryCacheRef = useRef<Record<string, TripItinerary>>({});
+
+  const healthSignature = `${(healthProfile?.conditions || []).slice().sort().join(',')}|${(healthProfile?.allergiesOrNotes || '').trim()}`;
+  const prevHealthSigRef = useRef<string>(healthSignature);
+  useEffect(() => {
+    if (prevHealthSigRef.current !== healthSignature) {
+      prevHealthSigRef.current = healthSignature;
+      resultCacheRef.current = {};
+      itineraryCacheRef.current = {};
+    }
+  }, [healthSignature]);
 
   const { t } = useUiTranslation(currentLang);
   const todayFormatted = formatLiveDate(currentLang);
@@ -539,6 +555,7 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
         freshOnly: true,
         prompt: optionalNotes.trim(),
         language: getLanguageEnglishName(currentLang),
+        healthProfile,
       });
 
       const callRecommendApi = async () => {
@@ -709,6 +726,7 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
         foodType: selectedFoodObj.label,
         language: getLanguageEnglishName(currentLang),
         guideResult: result,
+        healthProfile,
       });
 
       const callItineraryApi = async () => {
@@ -1877,6 +1895,30 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
           </div>
         )}
       </section>
+
+      {/* AI Daily Rotating Curated Picks (Refreshes automatically per Date + Health Profile) */}
+      {!result && (
+        <DailyPicksSpotlight
+          currentLang={currentLang}
+          healthProfile={healthProfile}
+          onOpenHealthSettings={() => onOpenHealthSettings?.()}
+          mode="all"
+          favorites={favorites}
+          onToggleFavorite={onToggleFavorite}
+          onSearchFocusCity={(focusCity) => {
+            const matched = CITY_KEYS.find((k) =>
+              focusCity.toLowerCase().includes(k.toLowerCase().split(',')[0])
+            );
+            if (matched) {
+              setCity(matched);
+              setCustomCity('');
+            } else {
+              setCustomCity(focusCity);
+            }
+            window.scrollTo({ top: 320, behavior: 'smooth' });
+          }}
+        />
+      )}
 
       {/* COMPREHENSIVE GREECE GUIDE RESULTS */}
       {result && (() => {
