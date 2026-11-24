@@ -1342,7 +1342,7 @@ function extractAndParseJSON(rawText: string) {
 // Quota Protection, Multi-Model Fallback Cascade & Server-Side TTL Caches
 // ============================================================================
 const GEMINI_QUOTA_COOLDOWN_MS = 15 * 60 * 1000;
-const GEMINI_BUSY_COOLDOWN_MS = 90 * 1000;
+const GEMINI_BUSY_COOLDOWN_MS = 25 * 1000;
 const modelCooldownUntil: Record<string, number> = {};
 const modelBusyUntil: Record<string, number> = {};
 
@@ -1358,8 +1358,10 @@ function isModelAvailable(model: string): boolean {
   return now >= (modelCooldownUntil[model] || 0) && now >= (modelBusyUntil[model] || 0);
 }
 
-function markModelQuotaExhausted(model: string) {
-  modelCooldownUntil[model] = Date.now() + GEMINI_QUOTA_COOLDOWN_MS;
+function markModelQuotaExhausted(model: string, err?: any) {
+  const msg = String(err?.message || err || '');
+  const isDailyLimit = /GenerateRequestsPerDay|PerDay|daily/i.test(msg);
+  modelCooldownUntil[model] = Date.now() + (isDailyLimit ? GEMINI_QUOTA_COOLDOWN_MS : 45 * 1000);
 }
 
 function markModelTemporarilyBusy(model: string, durationMs = GEMINI_BUSY_COOLDOWN_MS) {
@@ -1394,7 +1396,10 @@ async function callGeminiWithFallback(
     perAttemptTimeoutMs?: number;
   }
 ): Promise<{ text: string; modelUsed: string }> {
-  const activeModels = opts.models.filter((m) => isModelAvailable(m));
+  let activeModels = opts.models.filter((m) => isModelAvailable(m));
+  if (activeModels.length === 0) {
+    activeModels = opts.models.filter((m) => Date.now() >= (modelCooldownUntil[m] || 0));
+  }
   if (activeModels.length === 0) {
     throw Object.assign(new Error('All free-tier AI models are currently cooling down.'), { status: 503 });
   }
@@ -1410,7 +1415,7 @@ async function callGeminiWithFallback(
     for (const model of activeModels) {
       const remainingMs = totalBudgetMs - (Date.now() - startMs);
       if (remainingMs < 1500) break;
-      if (!isModelAvailable(model)) continue;
+      if (Date.now() < (modelCooldownUntil[model] || 0)) continue;
 
       try {
         const config: any = {
@@ -1421,9 +1426,11 @@ async function callGeminiWithFallback(
         }
         if (model === 'gemini-4-hydrogen') {
           config.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
+        } else if (model === 'gemini-3.1-flash-lite') {
+          config.thinkingConfig = { thinkingLevel: ThinkingLevel.MINIMAL };
         }
 
-        const perAttemptTimeout = Math.min(maxPerAttemptMs, Math.max(5000, remainingMs));
+        const perAttemptTimeout = Math.min(maxPerAttemptMs, Math.max(8000, remainingMs));
         const response = await withPromiseTimeout(
           ai.models.generateContent({
             model,
@@ -1442,8 +1449,8 @@ async function callGeminiWithFallback(
       } catch (err: any) {
         lastErr = err;
         if (isQuotaError(err)) {
-          markModelQuotaExhausted(model);
-          console.log(`[GEMINI QUOTA] ${model} quota reached; switching to fallback.`);
+          markModelQuotaExhausted(model, err);
+          console.log(`[GEMINI QUOTA] ${model} quota/RPM reached; switching to fallback.`);
           continue;
         }
         if (isTransientRetryableError(err)) {
@@ -1456,10 +1463,11 @@ async function callGeminiWithFallback(
       }
     }
 
-    if (!sawTransient || pass === maxPasses - 1 || Date.now() - startMs >= totalBudgetMs - 2000) {
+    if (!sawTransient || pass === maxPasses - 1 || Date.now() - startMs >= totalBudgetMs - 2500) {
       break;
     }
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    const backoffMs = Math.min(2500, 900 * (pass + 1));
+    await new Promise((resolve) => setTimeout(resolve, backoffMs));
   }
 
   throw lastErr || new Error('Gemini generation failed across available models.');
@@ -1497,8 +1505,18 @@ function setInTtlCache<T>(cache: Map<string, CacheEntry<T>>, key: string, value:
   cache.set(key, { value, expiresAt: Date.now() + ttlMs });
 }
 
-function formatGeminiErrorMessage(err: any, fallback: string): string {
+function formatGeminiErrorMessage(err: any, fallback: string, langName = 'English'): string {
   const raw = String(err?.message || err || '').trim();
+  const isBusy = isTransientRetryableError(err) || /cooling down|high demand|overloaded|503/i.test(raw);
+  const normLang = String(langName || '').trim().toLowerCase();
+  if (isBusy) {
+    if (normLang.includes('arabic') || normLang === 'ar') {
+      return 'تشهد خدمة الذكاء الاصطناعي ضغطاً مؤقتاً من المصدر حالياً. يرجى الضغط على زر إعادة المحاولة بعد ثوانٍ قليلة.';
+    }
+    if (normLang.includes('greek') || normLang === 'el') {
+      return 'Η υπηρεσία AI παρουσιάζει προσωρινή υπερφόρτωση. Παρακαλούμε δοκιμάστε ξανά σε λίγα δευτερόλεπτα.';
+    }
+  }
   if (!raw) return fallback;
   try {
     if (raw.startsWith('{')) {
@@ -3014,7 +3032,7 @@ CRITICAL RULES:
   let parsed: any = null;
 
   if (Date.now() >= searchGroundingCooldownUntil) {
-    const groundedModels = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'].filter((m) => isModelAvailable(m));
+    const groundedModels = ['gemini-3.1-flash-lite', 'gemini-4-hydrogen'].filter((m) => isModelAvailable(m));
     for (const gModel of groundedModels) {
       try {
         const cfg: any = { tools: [{ googleSearch: {} }] };
@@ -3027,7 +3045,7 @@ CRITICAL RULES:
             contents: baseDailyPrompt,
             config: cfg,
           }),
-          11000,
+          7500,
           `daily-grounding-${gModel}`
         );
         rawText = gRes.text || '';
@@ -3044,9 +3062,15 @@ CRITICAL RULES:
         if (rawText.trim()) break;
       } catch (err: any) {
         if (isQuotaError(err)) {
-          searchGroundingCooldownUntil = Date.now() + 15 * 60 * 1000;
-        } else if (isTransientRetryableError(err)) {
+          searchGroundingCooldownUntil = Date.now() + 10 * 60 * 1000;
+          console.log(`[DAILY GROUNDING QUOTA] ${gModel}:`, err?.message || err);
           break;
+        } else if (isTransientRetryableError(err)) {
+          markModelTemporarilyBusy(gModel);
+          console.log(`[DAILY GROUNDING BUSY] ${gModel}:`, err?.message || err);
+          break;
+        } else {
+          console.log(`[DAILY GROUNDING SKIP] ${gModel}:`, err?.message || err);
         }
       }
     }
@@ -3058,11 +3082,11 @@ CRITICAL RULES:
     } catch {
       try {
         const structured = await callGeminiWithFallback(ai, {
-          models: ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'],
+          models: ['gemini-3.1-flash-lite', 'gemini-4-hydrogen'],
           contents: `Convert this daily Greece recommendation JSON/text into strict valid JSON matching the schema in fluent ${langName}:\n\n${rawText}`,
           responseSchema: DAILY_PICKS_RESPONSE_SCHEMA,
-          maxPasses: 1,
-          totalBudgetMs: 11000,
+          maxPasses: 2,
+          totalBudgetMs: 12000,
         });
         parsed = extractAndParseJSON(structured.text || '{}');
       } catch {
@@ -3074,19 +3098,20 @@ CRITICAL RULES:
   if (!parsed || !parsed.culinaryPick || !parsed.hotelPick || !parsed.tripPick || !parsed.dishPick) {
     try {
       const fallbackRes = await callGeminiWithFallback(ai, {
-        models: ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'],
+        models: ['gemini-3.1-flash-lite', 'gemini-4-hydrogen'],
         contents: baseDailyPrompt,
         responseSchema: DAILY_PICKS_RESPONSE_SCHEMA,
-        maxPasses: 1,
-        totalBudgetMs: Math.max(12000, 22000 - (Date.now() - startMs)),
-        perAttemptTimeoutMs: 16000,
+        maxPasses: 3,
+        totalBudgetMs: Math.max(18000, 28000 - (Date.now() - startMs)),
+        perAttemptTimeoutMs: 12000,
       });
       parsed = extractAndParseJSON(fallbackRes.text || '{}');
     } catch (err: any) {
       return res.status(isQuotaError(err) ? 429 : 503).json({
         error: formatGeminiErrorMessage(
           err,
-          'Could not generate today’s AI curated picks right now. Please try again in a moment.'
+          'Could not generate today’s AI curated picks right now. Please try again in a moment.',
+          langName
         ),
       });
     }
@@ -3453,14 +3478,13 @@ CRITICAL RULES:
             if (rawText.trim()) break;
           } catch (searchErr: any) {
             if (isQuotaError(searchErr)) {
-              if (gModel === groundedModels[groundedModels.length - 1]) {
-                searchGroundingCooldownUntil = Date.now() + 15 * 60 * 1000;
-              }
-              console.log(`Google Search grounding quota reached for ${gModel}.`);
-            } else if (isTransientRetryableError(searchErr)) {
-              searchGroundingCooldownUntil = Date.now() + 2 * 60 * 1000;
-              console.log('Google Search grounding busy; using live web directory + AI.');
+              searchGroundingCooldownUntil = Date.now() + 10 * 60 * 1000;
+              console.log(`Google Search grounding quota reached for ${gModel}; using live directory + AI.`);
               break;
+            } else if (isTransientRetryableError(searchErr)) {
+              markModelTemporarilyBusy(gModel);
+              console.log(`Google Search grounding busy for ${gModel}; switching model.`);
+              continue;
             }
           }
         }
@@ -3886,9 +3910,9 @@ app.post('/api/translate', translatorLimiter, async (req: Request, res: Response
     const result = await callGeminiWithFallback(ai, {
       models: ['gemini-3.1-flash-lite', 'gemini-4-hydrogen'],
       contents: `${rules}\n\nRespond ONLY with valid JSON matching the exact shape of this input:\n${wrappedInput}`,
-      maxPasses: 1,
-      totalBudgetMs: 20000,
-      perAttemptTimeoutMs: 18000,
+      maxPasses: 2,
+      totalBudgetMs: 26000,
+      perAttemptTimeoutMs: 15000,
     });
 
     const parsedRaw = extractAndParseJSON(result.text || '{}');
@@ -4200,7 +4224,7 @@ app.post('/api/vision-translate', translatorLimiter, async (req: Request, res: R
       ? 'Focus on translating street signs, port/ferry departure boards, museum/site hours, traffic/parking notices, and practical directions clearly.'
       : 'Automatically detect whether this is a Greek restaurant menu, street/ferry/museum sign, receipt, or general text and extract the most helpful structured translation.';
 
-  const ai = createServerGeminiClient(apiKey);
+  const ai = createServerGeminiClient(apiKey, 'v1beta', 28000);
   const prompt = `You are a real-time bilingual visual interpreter for visitors in Greece.
 Analyze this image and translate all visible text into natural, fluent ${targetLangName}.
 ${modeHint}
@@ -4221,57 +4245,85 @@ RULES:
     },
   };
 
-  const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-4-hydrogen'].filter((m) => isModelAvailable(m));
+  let modelsToTry = ['gemini-3.1-flash-lite', 'gemini-4-hydrogen'].filter((m) => isModelAvailable(m));
   if (modelsToTry.length === 0) {
-    return res.status(429).json({ error: 'AI models are temporarily cooling down after quota limits. Please retry shortly.' });
+    modelsToTry = ['gemini-3.1-flash-lite', 'gemini-4-hydrogen'].filter(
+      (m) => Date.now() >= (modelCooldownUntil[m] || 0)
+    );
+  }
+  if (modelsToTry.length === 0) {
+    return res.status(429).json({
+      error: formatGeminiErrorMessage(
+        { status: 503 },
+        'AI models are temporarily cooling down after quota limits. Please retry shortly.',
+        targetLangName
+      ),
+    });
   }
 
   let lastErr: any = null;
-  for (const model of modelsToTry) {
-    try {
-      const config: any = {
-        responseMimeType: 'application/json',
-        responseSchema: VISION_TRANSLATE_SCHEMA,
-        thinkingConfig: {
-          thinkingLevel: model === 'gemini-3.1-flash-lite' ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW,
-        },
-      };
+  for (let pass = 0; pass < 2; pass++) {
+    let sawTransient = false;
+    for (const model of modelsToTry) {
+      if (Date.now() < (modelCooldownUntil[model] || 0)) continue;
+      try {
+        const config: any = {
+          responseMimeType: 'application/json',
+          responseSchema: VISION_TRANSLATE_SCHEMA,
+          thinkingConfig: {
+            thinkingLevel: model === 'gemini-3.1-flash-lite' ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW,
+          },
+        };
 
-      const response = await ai.models.generateContent({
-        model,
-        contents: { parts: [imagePart, { text: prompt }] },
-        config,
-      });
+        const response = await withPromiseTimeout(
+          ai.models.generateContent({
+            model,
+            contents: { parts: [imagePart, { text: prompt }] },
+            config,
+          }),
+          16000,
+          `vision-${model}`
+        );
 
-      const parsed = extractAndParseJSON(response.text || '{}');
-      return res.json({
-        result: {
-          detectedCategory: parsed.detectedCategory || mode || 'general',
-          detectedLanguage: parsed.detectedLanguage || 'Greek',
-          headline: parsed.headline || '',
-          summaryTranslation: parsed.summaryTranslation || '',
-          items: Array.isArray(parsed.items) ? parsed.items : [],
-          replyPhraseGreek: parsed.replyPhraseGreek || '',
-          replyPhrasePhonetic: parsed.replyPhrasePhonetic || '',
-          replyPhraseTranslation: parsed.replyPhraseTranslation || '',
-        },
-        modelUsed: model,
-      });
-    } catch (err: any) {
-      lastErr = err;
-      if (isQuotaError(err)) {
-        markModelQuotaExhausted(model);
-        continue;
+        const parsed = extractAndParseJSON(response.text || '{}');
+        return res.json({
+          result: {
+            detectedCategory: parsed.detectedCategory || mode || 'general',
+            detectedLanguage: parsed.detectedLanguage || 'Greek',
+            headline: parsed.headline || '',
+            summaryTranslation: parsed.summaryTranslation || '',
+            items: Array.isArray(parsed.items) ? parsed.items : [],
+            replyPhraseGreek: parsed.replyPhraseGreek || '',
+            replyPhrasePhonetic: parsed.replyPhrasePhonetic || '',
+            replyPhraseTranslation: parsed.replyPhraseTranslation || '',
+          },
+          modelUsed: model,
+        });
+      } catch (err: any) {
+        lastErr = err;
+        if (isQuotaError(err)) {
+          markModelQuotaExhausted(model, err);
+          continue;
+        }
+        if (isTransientRetryableError(err)) {
+          sawTransient = true;
+          markModelTemporarilyBusy(model);
+          console.warn(`[VISION TRANSLATE BUSY] ${model}:`, err?.message || err);
+          continue;
+        }
+        console.warn(`[VISION TRANSLATE ERROR] ${model}:`, err?.message || err);
       }
-      console.warn(`[VISION TRANSLATE ERROR] ${model}:`, err?.message || err);
     }
+    if (!sawTransient || pass === 1) break;
+    await new Promise((r) => setTimeout(r, 1000));
   }
 
-  const statusCode = isQuotaError(lastErr) ? 429 : 500;
+  const statusCode = isQuotaError(lastErr) ? 429 : isTransientRetryableError(lastErr) ? 503 : 500;
   return res.status(statusCode).json({
     error: formatGeminiErrorMessage(
       lastErr,
-      'Vision translation failed. Please check image clarity and try again.'
+      'Vision translation failed. Please check image clarity and try again.',
+      targetLangName
     ),
   });
 });
@@ -4296,7 +4348,7 @@ app.post('/api/voice-translate', translatorLimiter, async (req: Request, res: Re
     return res.status(500).json({ error: 'Gemini API key is not configured on the server.' });
   }
 
-  const ai = createServerGeminiClient(apiKey, 'v1beta', 12000);
+  const ai = createServerGeminiClient(apiKey, 'v1beta', 28000);
   const sourceLangName =
     sourceLanguage === 'auto' ? 'the spoken language (auto-detect)' : resolveLanguageName(sourceLanguage);
   const targetLangName = resolveLanguageName(targetLanguage);
@@ -4450,8 +4502,13 @@ CRITICAL: If no clear human speech is heard, set "transcript" to "" and "transla
     }
 
     if (!rawTranscript) {
-      return res.status(isQuotaError(audioErr) ? 429 : 500).json({
-        error: formatGeminiErrorMessage(audioErr, 'Could not process audio translation. Please try again.'),
+      const audioStatus = isQuotaError(audioErr) ? 429 : isTransientRetryableError(audioErr) ? 503 : 500;
+      return res.status(audioStatus).json({
+        error: formatGeminiErrorMessage(
+          audioErr,
+          'Could not process audio translation. Please try again.',
+          uiLangName
+        ),
       });
     }
   }
@@ -4471,6 +4528,9 @@ Requirements:
 - If ${targetLangName} is Greek, provide simple Latin phonetic pronunciation in "greekPhonetic"; if translating FROM Greek to another language, put phonetic pronunciation of the Greek phrase in "greekPhonetic"; otherwise "".
 - Provide a brief helpful hospitality/context note in ${uiLangName} inside "culturalTip" if useful, otherwise "".`,
       responseSchema: VOICE_TRANSLATE_SCHEMA,
+      maxPasses: 3,
+      totalBudgetMs: 32000,
+      perAttemptTimeoutMs: 14000,
     });
 
     const parsed = extractAndParseJSON(translationResult.text || '{}');
@@ -4484,8 +4544,9 @@ Requirements:
       },
     });
   } catch (err: any) {
-    return res.status(isQuotaError(err) ? 429 : 500).json({
-      error: formatGeminiErrorMessage(err, 'Translation failed. Please try again.'),
+    const stepBStatus = isQuotaError(err) ? 429 : isTransientRetryableError(err) ? 503 : 500;
+    return res.status(stepBStatus).json({
+      error: formatGeminiErrorMessage(err, 'Translation failed. Please try again.', uiLangName),
     });
   }
 });

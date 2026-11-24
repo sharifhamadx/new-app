@@ -119,36 +119,44 @@ function cleanApiError(rawError: any, fallback: string): string {
 async function postJsonSafe<T>(endpoint: string, bodyObj: any, fallbackMsg: string): Promise<T> {
   const payload = JSON.stringify(bodyObj);
 
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     const res = await fetch(apiUrl(endpoint), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Accept: 'application/json',
+        'X-Requested-With': 'AEGEA-App',
       },
       body: payload,
     });
 
     const rawText = await res.text();
     const trimmed = rawText.trim();
-    const isHtmlOrWarmup =
-      trimmed.startsWith('<') || res.status === 502 || res.status === 503 || res.status === 504;
-
-    if (isHtmlOrWarmup) {
-      if (attempt === 0) {
-        await new Promise((r) => setTimeout(r, 1200));
-        continue;
-      }
-      throw new Error('The translation service is temporarily busy. Please try again in a moment.');
+    let parsedJson: any = null;
+    try {
+      parsedJson = trimmed && !trimmed.startsWith('<') ? JSON.parse(trimmed) : null;
+    } catch {
+      parsedJson = null;
     }
 
-    let data: any = null;
-    try {
-      data = trimmed ? JSON.parse(trimmed) : {};
-    } catch {
+    const rawErr = String(parsedJson?.error || '');
+    const isTransient =
+      trimmed.startsWith('<') ||
+      res.status === 502 ||
+      res.status === 503 ||
+      res.status === 504 ||
+      /timed out|high demand|overloaded|cooling down/i.test(rawErr);
+
+    if (isTransient && attempt < 2) {
+      await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+      continue;
+    }
+
+    if (!parsedJson && trimmed) {
       throw new Error(fallbackMsg);
     }
 
+    const data = parsedJson || {};
     if (!res.ok) {
       throw new Error(cleanApiError(data?.error, fallbackMsg));
     }

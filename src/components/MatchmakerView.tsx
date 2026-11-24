@@ -18,7 +18,7 @@ import {
   translatePayloadDetailed,
   getLanguageEnglishName,
 } from '../hooks/useTranslatedContent';
-import { IMG_HERO_AEGEAN } from '../data/greekCuratedData';
+import IMG_HERO_AEGEAN from '../assets/images/hero_aegean_taverna_1794781569774.jpg';
 import { generateExecutivePdf } from '../utils/generateExecutivePdf';
 import { apiUrl } from '../utils/apiBase';
 import { PlaceActionLinks } from './PlaceActionLinks';
