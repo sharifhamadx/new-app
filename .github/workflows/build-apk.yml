@@ -10,7 +10,7 @@ on:
       api_base_url:
         description: 'Hosted Backend URL for API calls inside the APK'
         required: false
-        default: 'https://ais-pre-vbei53jcf2iskwspzf3lnz-288600478609.europe-west2.run.app'
+        default: 'https://ais-pre-z6rujnvxk65z7zmypdzh7l-288600478609.europe-west2.run.app'
 
 permissions:
   contents: write
@@ -51,7 +51,7 @@ jobs:
 
       - name: Build production web assets
         env:
-          VITE_API_BASE_URL: ${{ github.event.inputs.api_base_url || vars.VITE_API_BASE_URL || 'https://ais-pre-vbei53jcf2iskwspzf3lnz-288600478609.europe-west2.run.app' }}
+          VITE_API_BASE_URL: ${{ github.event.inputs.api_base_url || vars.VITE_API_BASE_URL || 'https://ais-pre-z6rujnvxk65z7zmypdzh7l-288600478609.europe-west2.run.app' }}
         run: npm run build
 
       - name: Generate and configure Capacitor Android project
@@ -87,6 +87,6 @@ jobs:
           tag_name: apk-v1.${{ github.run_number }}
           name: AEGEA Smart Guide APK v1.${{ github.run_number }}
           body: |
-            Automated Android APK build for **AEGEA — Your Smart Guide** (includes Full Greece Guide, Live Camera & Voice Translator with Gemini TTS, and Chrome Custom Tab Google Sign-In bridge).
+            Automated Android APK build for **AEGEA — Your Smart Guide** (includes Daily AI Curated Picks, Personal Health Profile matching, Full Greece AI Guide, Live Camera & Voice Translator, and Activation Code system).
             Download `AEGEA-Smart-Guide.apk` below directly on your Android phone and tap to install.
           files: AEGEA-Smart-Guide.apk
