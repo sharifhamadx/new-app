@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       api_base_url:
-        description: 'Hosted Backend URL for API calls inside the APK'
+        description: 'Optional override Backend URL (leave blank to use VITE_API_BASE_URL variable)'
         required: false
-        default: 'https://ais-pre-z6rujnvxk65z7zmypdzh7l-288600478609.europe-west2.run.app'
+        default: ''
 
 permissions:
   contents: write
