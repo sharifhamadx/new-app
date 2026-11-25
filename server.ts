@@ -52,13 +52,17 @@ app.use('/api', (req: Request, res: Response, next: NextFunction) => {
 
 app.use(express.json({ limit: '15mb' }));
 
-// Load Firebase config to verify Firebase ID tokens against Google Identity Toolkit
+// Load Firebase config to verify Firebase ID tokens & Firestore user approval state
 let firebaseApiKey = '';
+let firebaseProjectId = '';
+let firestoreDatabaseId = '(default)';
 let firebaseClientConfig: Record<string, any> | null = null;
 try {
   const fbConfigRaw = fs.readFileSync(path.join(__dirname, 'firebase-applet-config.json'), 'utf8');
   const fbConfig = JSON.parse(fbConfigRaw);
   firebaseApiKey = fbConfig.apiKey || '';
+  firebaseProjectId = fbConfig.projectId || '';
+  firestoreDatabaseId = fbConfig.firestoreDatabaseId || '(default)';
   firebaseClientConfig = {
     apiKey: fbConfig.apiKey || '',
     authDomain: fbConfig.authDomain || '',
@@ -70,6 +74,11 @@ try {
 } catch (err) {
   console.warn('Could not read firebase-applet-config.json on server:', err);
 }
+
+const ADMIN_EMAIL_SET = new Set([
+  'sharifhamadx122@gmail.com',
+  'sharifhamadmoko@gmail.com',
+]);
 
 // Generic hospitality/geography stopwords ignored when verifying Wikipedia/Commons photo matches
 const GENERIC_PLACE_TOKENS = new Set([
@@ -349,8 +358,8 @@ async function resolveVerifiedPlaceImageWithBudget(
   ]);
 }
 
-// Verify Firebase Google ID Token via Google Identity Toolkit (kept solely for optional legacy mobile bridge)
-async function verifyFirebaseIdToken(idToken: string): Promise<{ uid: string; email: string; emailVerified: boolean; displayName?: string } | null> {
+// Verify Firebase ID Token via Google Identity Toolkit (supports Google Sign-In & Email/Password)
+async function verifyFirebaseIdToken(idToken: string): Promise<{ uid: string; email: string; emailVerified: boolean; displayName?: string; photoUrl?: string } | null> {
   if (!firebaseApiKey || !idToken) return null;
   try {
     const resp = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${firebaseApiKey}`, {
@@ -362,15 +371,67 @@ async function verifyFirebaseIdToken(idToken: string): Promise<{ uid: string; em
     if (!resp.ok) return null;
     const data = await resp.json();
     const user = data?.users?.[0];
-    if (!user || !user.localId || !user.email) return null;
+    if (!user || !user.localId || !user.email || user.disabled) return null;
     return {
       uid: user.localId,
-      email: String(user.email).toLowerCase(),
+      email: String(user.email).trim().toLowerCase(),
       emailVerified: Boolean(user.emailVerified),
       displayName: user.displayName,
+      photoUrl: user.photoUrl,
     };
   } catch (err) {
     console.error('Token lookup failed:', err);
+    return null;
+  }
+}
+
+async function fetchFirestoreUserApproval(
+  uid: string,
+  idToken: string
+): Promise<{
+  approvalStatus: 'pending' | 'approved' | 'rejected';
+  isPremium: boolean;
+  subscriptionPlan: string;
+  subscriptionExpiresAt: string;
+} | null> {
+  if (!firebaseProjectId || !uid || !idToken) return null;
+  try {
+    const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(firebaseProjectId)}/databases/${encodeURIComponent(firestoreDatabaseId)}/documents/users/${encodeURIComponent(uid)}`;
+    const resp = await fetch(url, {
+      method: 'GET',
+      signal: AbortSignal.timeout(5000),
+      headers: {
+        Authorization: `Bearer ${idToken}`,
+        Accept: 'application/json',
+      },
+    });
+    if (!resp.ok) return null;
+    const docData: any = await resp.json();
+    const fields = docData?.fields || {};
+    const approvalRaw = String(fields.approvalStatus?.stringValue || 'pending');
+    const isPremium = Boolean(fields.isPremium?.booleanValue);
+    const subscriptionPlan = String(fields.subscriptionPlan?.stringValue || 'free');
+    const subscriptionExpiresAt = String(fields.subscriptionExpiresAt?.stringValue || '');
+    const expired =
+      Boolean(subscriptionExpiresAt) &&
+      Number.isFinite(Date.parse(subscriptionExpiresAt)) &&
+      Date.now() > Date.parse(subscriptionExpiresAt);
+
+    const approvalStatus =
+      expired
+        ? 'pending'
+        : approvalRaw === 'approved' || approvalRaw === 'rejected'
+        ? approvalRaw
+        : 'pending';
+
+    return {
+      approvalStatus,
+      isPremium: expired ? false : isPremium,
+      subscriptionPlan: expired ? 'free' : subscriptionPlan,
+      subscriptionExpiresAt,
+    };
+  } catch (err) {
+    console.warn('[FIRESTORE APPROVAL CHECK]', (err as Error)?.message || err);
     return null;
   }
 }
@@ -880,7 +941,121 @@ function mintGuestSession(existingTrialId?: string, termsAccepted = false): Sess
   };
 }
 
-function requireAdminMiddleware(req: Request, res: Response, next: NextFunction) {
+interface PaidAccessCheck {
+  allowed: boolean;
+  status?: number;
+  error?: string;
+  approvalRequired?: boolean;
+  approvalStatus?: 'pending' | 'rejected' | 'unregistered';
+  isAdmin?: boolean;
+  uid?: string;
+  trialId: string;
+  email?: string;
+  session?: SessionPayload;
+}
+
+async function resolvePaidFeatureAccess(req: Request): Promise<PaidAccessCheck> {
+  const authHeader = String(req.headers.authorization || '');
+  const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+
+  if (bearerToken && bearerToken.split('.').length === 3) {
+    const fb = await verifyFirebaseIdToken(bearerToken);
+    if (!fb) {
+      return {
+        allowed: false,
+        status: 401,
+        error: 'Session expired. Please sign in again with your email.',
+        approvalRequired: true,
+        approvalStatus: 'unregistered',
+        trialId: 'unauth',
+      };
+    }
+    if (ADMIN_EMAIL_SET.has(fb.email) && fb.emailVerified) {
+      return {
+        allowed: true,
+        isAdmin: true,
+        uid: fb.uid,
+        trialId: fb.uid,
+        email: fb.email,
+      };
+    }
+    if (!fb.emailVerified) {
+      return {
+        allowed: false,
+        status: 403,
+        error: 'Please verify your email address first, then complete subscription payment to be activated by the Admin.',
+        approvalRequired: true,
+        approvalStatus: 'pending',
+        uid: fb.uid,
+        trialId: fb.uid,
+        email: fb.email,
+      };
+    }
+    const statusDoc = await fetchFirestoreUserApproval(fb.uid, bearerToken);
+    if (statusDoc && statusDoc.approvalStatus === 'approved' && statusDoc.isPremium) {
+      return {
+        allowed: true,
+        isAdmin: false,
+        uid: fb.uid,
+        trialId: fb.uid,
+        email: fb.email,
+      };
+    }
+    if (statusDoc?.approvalStatus === 'rejected') {
+      return {
+        allowed: false,
+        status: 403,
+        error: 'Your account access is currently suspended. Please contact AEGEA Admin via WhatsApp.',
+        approvalRequired: true,
+        approvalStatus: 'rejected',
+        uid: fb.uid,
+        trialId: fb.uid,
+        email: fb.email,
+      };
+    }
+    return {
+      allowed: false,
+      status: 403,
+      error: 'Your account is pending Admin approval. Please pay your subscription via WhatsApp so Admin can activate your account.',
+      approvalRequired: true,
+      approvalStatus: 'pending',
+      uid: fb.uid,
+      trialId: fb.uid,
+      email: fb.email,
+    };
+  }
+
+  const { session } = resolveSessionFromRequest(req);
+  const active = session ? validateSessionActive(session) : null;
+  if (active && (active.role === 'admin' || active.role === 'vip')) {
+    return {
+      allowed: true,
+      isAdmin: active.role === 'admin',
+      uid: active.sid,
+      trialId: active.trialId,
+      session: active,
+    };
+  }
+
+  return {
+    allowed: false,
+    status: 403,
+    error: 'Sign in with your email and request Admin subscription activation (or redeem a VIP code) to unlock AEGEA AI.',
+    approvalRequired: true,
+    approvalStatus: 'unregistered',
+    trialId: active?.trialId || 'unauth',
+  };
+}
+
+async function requireAdminMiddleware(req: Request, res: Response, next: NextFunction) {
+  const authHeader = String(req.headers.authorization || '');
+  const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+  if (bearerToken && bearerToken.split('.').length === 3) {
+    const fb = await verifyFirebaseIdToken(bearerToken);
+    if (fb && fb.emailVerified && ADMIN_EMAIL_SET.has(fb.email)) {
+      return next();
+    }
+  }
   const { session } = resolveSessionFromRequest(req);
   if (!session || session.role !== 'admin') {
     return res.status(403).json({ error: 'Admin authorization required.' });
@@ -900,14 +1075,16 @@ app.get('/api/subscribe-whatsapp', (req: Request, res: Response) => {
   const topic = String(req.query.topic || '').toLowerCase();
   const plan = String(req.query.plan || 'monthly').toLowerCase();
   const lang = String(req.query.lang || 'en').toLowerCase();
+  const accountEmail = String(req.query.email || '').trim().slice(0, 160);
+  const emailTag = accountEmail ? ` (${accountEmail})` : '';
 
   let text = '';
   if (topic === 'support') {
-    text = 'Hello AEGEA Support! I would like to ask a question or request assistance with the app.';
+    text = `Hello AEGEA Support! I would like to ask a question or request assistance with the app${emailTag}.`;
     if (lang.startsWith('ar')) {
-      text = 'مرحباً دعم تطبيق AEGEA! أود الاستفسار أو طلب المساعدة بخصوص التطبيق.';
+      text = `مرحباً دعم تطبيق AEGEA! أود الاستفسار أو طلب المساعدة بخصوص التطبيق${emailTag}.`;
     } else if (lang.startsWith('el')) {
-      text = 'Γεια σας Υποστήριξη AEGEA! Θα ήθελα να ρωτήσω ή να ζητήσω βοήθεια για την εφαρμογή.';
+      text = `Γεια σας Υποστήριξη AEGEA! Θα ήθελα να ρωτήσω ή να ζητήσω βοήθεια για την εφαρμογή${emailTag}.`;
     }
   } else {
     const planNames: Record<string, { en: string; ar: string; el: string }> = {
@@ -929,11 +1106,11 @@ app.get('/api/subscribe-whatsapp', (req: Request, res: Response) => {
     };
     const chosen = planNames[plan] || planNames.monthly;
 
-    text = `Hello AEGEA Support! I would like to subscribe to ${chosen.en} and receive my VIP activation code.`;
+    text = `Hello AEGEA Admin! I registered with my email${emailTag} and would like to pay for ${chosen.en} to activate my account.`;
     if (lang.startsWith('ar')) {
-      text = `مرحباً، أرغب بالاشتراك في تطبيق AEGEA (${chosen.ar}) والحصول على رمز التفعيل VIP الخاص بي.`;
+      text = `مرحباً مدير تطبيق AEGEA! قمت بالتسجيل عبر البريد الإلكتروني${emailTag} وأرغب في دفع قيمة اشتراك (${chosen.ar}) لتفعيل حسابي.`;
     } else if (lang.startsWith('el')) {
-      text = `Γεια σας! Θα ήθελα να εγγραφώ στο AEGEA (${chosen.el}) και να λάβω τον κωδικό ενεργοποίησης VIP.`;
+      text = `Γεια σας! Εγγράφηκα με το email μου${emailTag} και θα ήθελα να πληρώσω για το ${chosen.el} ώστε να ενεργοποιηθεί ο λογαριασμός μου.`;
     }
   }
 
@@ -3281,28 +3458,18 @@ CRITICAL RULES:
   return res.json(payload);
 });
 
-// Real Live Google-Search Grounded AI Recommendation Endpoint (Guest 2 Free Trial + VIP Activation Codes)
+// Real Live Google-Search Grounded AI Recommendation Endpoint (Requires Admin-Approved Subscriber, Admin, or Active VIP Code)
 app.post('/api/recommend', aiRecommendLimiter, requireSameOriginOrHeader, async (req: Request, res: Response) => {
-  const clientIp = getClientIp(req);
-  const resolved = resolveSessionFromRequest(req);
-  let activeSession = resolved.session ? validateSessionActive(resolved.session) : null;
-  let freshlyMintedToken = '';
-
-  if (!activeSession) {
-    activeSession = mintGuestSession();
-    freshlyMintedToken = signSessionToken(activeSession);
-    emitSessionCookie(res, freshlyMintedToken, 30 * 24 * 60 * 60);
+  const access = await resolvePaidFeatureAccess(req);
+  if (!access.allowed) {
+    return res.status(access.status || 403).json({
+      error: access.error,
+      approvalRequired: true,
+      approvalStatus: access.approvalStatus || 'pending',
+    });
   }
 
-  if (activeSession.role === 'guest') {
-    const remaining = getGuestSearchesRemaining(activeSession.trialId, clientIp);
-    if (remaining <= 0) {
-      return res.status(403).json({
-        error: 'Your 2 free trial searches have been used. Enter a VIP activation code or subscribe via WhatsApp to unlock unlimited searches.',
-        codeRequired: true,
-      });
-    }
-  }
+  const activeSession = access.session;
 
   const {
     city = '',
@@ -3318,7 +3485,7 @@ app.post('/api/recommend', aiRecommendLimiter, requireSameOriginOrHeader, async 
     healthProfile: rawBodyHealth,
   } = req.body || {};
 
-  const sessionHealth = securityStore.healthProfiles?.[activeSession.trialId];
+  const sessionHealth = securityStore.healthProfiles?.[access.trialId];
   const bodyHealth = rawBodyHealth ? sanitizeHealthProfile(rawBodyHealth) : null;
   const effectiveHealth: StoredHealthProfile =
     bodyHealth && (bodyHealth.conditions.length > 0 || bodyHealth.allergiesOrNotes)
@@ -3371,14 +3538,19 @@ app.post('/api/recommend', aiRecommendLimiter, requireSameOriginOrHeader, async 
 
   const cachedRecommend = getFromTtlCache(serverRecommendCache, recommendCacheKey);
   if (cachedRecommend) {
-    const updatedUser = consumeGuestSearchQuota(req, res, activeSession);
+    if (activeSession) {
+      const updatedUser = consumeGuestSearchQuota(req, res, activeSession);
+      return res.json({
+        ...cachedRecommend,
+        searchedAt: now.toISOString(),
+        sessionMeta: {
+          user: updatedUser,
+        },
+      });
+    }
     return res.json({
       ...cachedRecommend,
       searchedAt: now.toISOString(),
-      sessionMeta: {
-        user: updatedUser,
-        ...(freshlyMintedToken ? { sessionToken: freshlyMintedToken } : {}),
-      },
     });
   }
 
@@ -3840,14 +4012,17 @@ CRITICAL RULES:
       80
     );
 
-    const updatedUser = consumeGuestSearchQuota(req, res, activeSession);
-    return res.json({
-      ...responsePayload,
-      sessionMeta: {
-        user: updatedUser,
-        ...(freshlyMintedToken ? { sessionToken: freshlyMintedToken } : {}),
-      },
-    });
+    if (activeSession) {
+      const updatedUser = consumeGuestSearchQuota(req, res, activeSession);
+      return res.json({
+        ...responsePayload,
+        sessionMeta: {
+          user: updatedUser,
+        },
+      });
+    }
+
+    return res.json(responsePayload);
   } catch (err: any) {
     console.error('[RECOMMEND ERROR]', err);
     return res.status(500).json({
@@ -4005,13 +4180,12 @@ app.post('/api/translate', translatorLimiter, async (req: Request, res: Response
 
 // VIP 3-Day Greece Itinerary Generator Endpoint
 app.post('/api/itinerary', aiRecommendLimiter, requireSameOriginOrHeader, async (req: Request, res: Response) => {
-  const resolved = resolveSessionFromRequest(req);
-  const activeSession = resolved.session ? validateSessionActive(resolved.session) : null;
-
-  if (!activeSession || (activeSession.role !== 'vip' && activeSession.role !== 'admin')) {
-    return res.status(403).json({
-      error: 'VIP activation code required to build custom 3-Day VIP Itineraries.',
-      codeRequired: true,
+  const access = await resolvePaidFeatureAccess(req);
+  if (!access.allowed) {
+    return res.status(access.status || 403).json({
+      error: access.error,
+      approvalRequired: true,
+      approvalStatus: access.approvalStatus || 'pending',
     });
   }
 
@@ -4020,7 +4194,7 @@ app.post('/api/itinerary', aiRecommendLimiter, requireSameOriginOrHeader, async 
     return res.status(400).json({ error: 'Search results are required to generate a 3-day itinerary.' });
   }
 
-  const sessionHealth = securityStore.healthProfiles?.[activeSession.trialId];
+  const sessionHealth = securityStore.healthProfiles?.[access.trialId];
   const bodyItinHealth = rawItinHealth ? sanitizeHealthProfile(rawItinHealth) : null;
   const effectiveHealth =
     bodyItinHealth && (bodyItinHealth.conditions.length > 0 || bodyItinHealth.allergiesOrNotes)
@@ -4193,7 +4367,15 @@ function createServerGeminiClient(apiKey: string, apiVersion: string = 'v1beta',
 }
 
 // 1. Live Camera Vision Translator for Greek Menus, Street Signs & Notices
-app.post('/api/vision-translate', translatorLimiter, async (req: Request, res: Response) => {
+app.post('/api/vision-translate', translatorLimiter, requireSameOriginOrHeader, async (req: Request, res: Response) => {
+  const access = await resolvePaidFeatureAccess(req);
+  if (!access.allowed) {
+    return res.status(access.status || 403).json({
+      error: access.error,
+      approvalRequired: true,
+      approvalStatus: access.approvalStatus || 'pending',
+    });
+  }
   const { imageBase64, mimeType = 'image/jpeg', targetLanguage = 'en', mode = 'auto' } = req.body || {};
 
   if (!imageBase64 || typeof imageBase64 !== 'string') {
@@ -4329,7 +4511,15 @@ RULES:
 });
 
 // 2. Real-Time Two-Way Voice Transcription + Translation
-app.post('/api/voice-translate', translatorLimiter, async (req: Request, res: Response) => {
+app.post('/api/voice-translate', translatorLimiter, requireSameOriginOrHeader, async (req: Request, res: Response) => {
+  const access = await resolvePaidFeatureAccess(req);
+  if (!access.allowed) {
+    return res.status(access.status || 403).json({
+      error: access.error,
+      approvalRequired: true,
+      approvalStatus: access.approvalStatus || 'pending',
+    });
+  }
   const {
     audioBase64,
     mimeType = 'audio/webm',
@@ -4586,7 +4776,15 @@ function ensureWavBase64(base64Data: string, mimeType?: string): string {
 }
 
 // 3. Gemini 3.8 Neural Text-to-Speech (returns WAV audio/wav base64)
-app.post('/api/tts', translatorLimiter, async (req: Request, res: Response) => {
+app.post('/api/tts', translatorLimiter, requireSameOriginOrHeader, async (req: Request, res: Response) => {
+  const access = await resolvePaidFeatureAccess(req);
+  if (!access.allowed) {
+    return res.status(access.status || 403).json({
+      error: access.error,
+      approvalRequired: true,
+      approvalStatus: access.approvalStatus || 'pending',
+    });
+  }
   const { text, language = 'el', voiceName = 'Kore' } = req.body || {};
 
   const cleanText = String(text || '').trim().slice(0, 1200);

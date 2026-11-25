@@ -28,9 +28,10 @@ export const Footer: React.FC<FooterProps> = ({
   };
 
   return (
-    <footer className="bg-slate-900 text-slate-400 border-t border-slate-800 text-xs print:hidden">
+    <footer className="bg-[#082F5E] dark:bg-[#061325] text-slate-300 border-t border-[#163256] text-xs print:hidden">
+      <div className="aegean-meander-border w-full" />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-8">
-        <div className="flex flex-col lg:flex-row items-center justify-between gap-6 pb-8 border-b border-slate-800">
+        <div className="flex flex-col lg:flex-row items-center justify-between gap-6 pb-8 border-b border-[#163256]">
           {/* Logo & Tagline */}
           <div className="flex flex-col items-center lg:items-start gap-2">
             <BrandLockup
@@ -38,7 +39,7 @@ export const Footer: React.FC<FooterProps> = ({
               subtitle={t.navbar.brandSubtitle || 'Your Smart Guide'}
               darkSurface
             />
-            <p className="text-[11px] text-slate-400 font-medium text-center lg:text-start">
+            <p className="text-[11px] text-sky-200/80 font-medium text-center lg:text-start">
               {t.footer.brandTagline}
             </p>
           </div>
@@ -50,14 +51,14 @@ export const Footer: React.FC<FooterProps> = ({
               onClick={() => onTabChange('about')}
               className="hover:text-white transition-colors flex items-center gap-1.5 cursor-pointer"
             >
-              <User className="w-3.5 h-3.5 text-sky-400" />
+              <User className="w-3.5 h-3.5 text-sky-300" />
               <span>{t.footer.aboutLink}</span>
             </button>
 
             <button
               type="button"
               onClick={() => onTabChange('about')}
-              className="hover:text-white transition-colors flex items-center gap-1.5 text-amber-400 cursor-pointer"
+              className="hover:text-white transition-colors flex items-center gap-1.5 text-amber-300 cursor-pointer"
             >
               <Building2 className="w-3.5 h-3.5" />
               <span>{t.footer.partnerLink}</span>
@@ -68,14 +69,14 @@ export const Footer: React.FC<FooterProps> = ({
               onClick={() => onTabChange('terms')}
               className="hover:text-white transition-colors flex items-center gap-1.5 cursor-pointer"
             >
-              <Shield className="w-3.5 h-3.5 text-sky-400" />
+              <Shield className="w-3.5 h-3.5 text-sky-300" />
               <span>{t.footer.legalLink}</span>
             </button>
 
             <button
               type="button"
               onClick={goToSecureContact}
-              className="hover:text-white transition-colors flex items-center gap-1.5 text-sky-400 font-bold cursor-pointer"
+              className="hover:text-white transition-colors flex items-center gap-1.5 text-sky-300 font-bold cursor-pointer"
             >
               <Mail className="w-3.5 h-3.5" />
               <span>{t.footer.contactEmail}</span>
@@ -91,8 +92,8 @@ export const Footer: React.FC<FooterProps> = ({
                 onClick={() => onLanguageChange(l.code)}
                 className={`px-2 py-1 rounded-lg uppercase tracking-wider text-[11px] font-bold transition-colors cursor-pointer ${
                   currentLang.toLowerCase() === l.code
-                    ? 'bg-sky-600 text-white'
-                    : 'bg-slate-800 text-slate-400 hover:text-white'
+                    ? 'bg-[#0D5EAF] text-white'
+                    : 'bg-[#0B1D36] text-slate-300 hover:text-white'
                 }`}
                 title={l.nativeName}
               >

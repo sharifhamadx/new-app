@@ -61,7 +61,7 @@ const bgXmlPath = path.join(androidResDir, 'values', 'ic_launcher_background.xml
 fs.mkdirSync(path.dirname(bgXmlPath), { recursive: true });
 fs.writeFileSync(
   bgXmlPath,
-  `<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <color name="ic_launcher_background">#0369A1</color>\n</resources>\n`,
+  `<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <color name="ic_launcher_background">#0D5EAF</color>\n</resources>\n`,
   'utf8'
 );
 

@@ -1,5 +1,6 @@
 import { DailyPicksResult, HealthProfile, SubscriptionPlan, User } from '../types';
-import { apiUrl } from './apiBase';
+import { apiUrl, getActiveApiBaseUrl, isNativeAppPlatform } from './apiBase';
+import { getFreshFirebaseIdToken } from '../firebase';
 
 // Strict in-memory token store (never saved to localStorage or sessionStorage)
 let inMemoryBearerToken: string | null = null;
@@ -55,8 +56,15 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   const headers = new Headers(init.headers || {});
   headers.set('Accept', 'application/json');
   headers.set('X-Requested-With', 'AEGEA-App');
-  if (inMemoryBearerToken && !headers.has('Authorization')) {
-    headers.set('Authorization', `Bearer ${inMemoryBearerToken}`);
+
+  if (!headers.has('Authorization')) {
+    // Prefer signed-in Firebase ID token (works seamlessly inside APK & Render without cookies)
+    const fbToken = await getFreshFirebaseIdToken(false);
+    if (fbToken) {
+      headers.set('Authorization', `Bearer ${fbToken}`);
+    } else if (inMemoryBearerToken) {
+      headers.set('Authorization', `Bearer ${inMemoryBearerToken}`);
+    }
   }
 
   return fetch(apiUrl(path), {
@@ -64,6 +72,37 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
     credentials: 'include',
     headers,
   });
+}
+
+let warmedUpOnce = false;
+export async function warmUpBackendIfNative(): Promise<boolean> {
+  if (warmedUpOnce) return true;
+  if (isNativeAppPlatform() && !getActiveApiBaseUrl()) return false;
+  try {
+    const res = await fetch(apiUrl('/api/health'), {
+      method: 'GET',
+      signal: AbortSignal.timeout(12000),
+    });
+    if (res.ok) {
+      warmedUpOnce = true;
+      return true;
+    }
+  } catch {
+    // Ignore transient warm-up failure
+  }
+  return false;
+}
+
+export async function testBackendHealth(candidateBaseUrl?: string): Promise<boolean> {
+  const base = (candidateBaseUrl || getActiveApiBaseUrl()).trim().replace(/\/+$/, '');
+  const target = base ? `${base}/api/health` : '/api/health';
+  const res = await fetch(target, {
+    method: 'GET',
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!res.ok) return false;
+  const data = await res.json().catch(() => ({}));
+  return Boolean(data?.ok);
 }
 
 async function parseJsonSafe(res: Response) {

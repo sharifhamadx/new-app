@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       api_base_url:
-        description: 'Optional override Backend URL (leave blank to use VITE_API_BASE_URL variable)'
+        description: 'Backend Render URL (e.g. https://aegea-smart-guide.onrender.com)'
         required: false
         default: ''
 
@@ -49,9 +49,23 @@ jobs:
       - name: Install project dependencies
         run: npm install --legacy-peer-deps
 
-      - name: Build production web assets
+      - name: Resolve Backend API URL
+        id: resolve_api
         env:
-          VITE_API_BASE_URL: ${{ github.event.inputs.api_base_url || vars.VITE_API_BASE_URL || 'https://ais-pre-z6rujnvxk65z7zmypdzh7l-288600478609.europe-west2.run.app' }}
+          INPUT_URL: ${{ github.event.inputs.api_base_url }}
+          VAR_URL: ${{ vars.VITE_API_BASE_URL }}
+          SECRET_URL: ${{ secrets.VITE_API_BASE_URL }}
+        run: |
+          API_URL="${INPUT_URL:-${VAR_URL:-${SECRET_URL:-}}}"
+          API_URL="${API_URL%/}"
+          if [ -z "$API_URL" ]; then
+            echo "::warning::VITE_API_BASE_URL is not set in GitHub Variables or Secrets. Users can set their Render URL inside the app settings, or set VITE_API_BASE_URL in Repository Variables."
+          else
+            echo "Building APK against backend URL: $API_URL"
+          fi
+          echo "VITE_API_BASE_URL=$API_URL" >> $GITHUB_ENV
+
+      - name: Build production web assets
         run: npm run build
 
       - name: Generate and configure Capacitor Android project
@@ -87,6 +101,6 @@ jobs:
           tag_name: apk-v1.${{ github.run_number }}
           name: AEGEA Smart Guide APK v1.${{ github.run_number }}
           body: |
-            Automated Android APK build for **AEGEA — Your Smart Guide** (includes Daily AI Curated Picks, Personal Health Profile matching, Full Greece AI Guide, Live Camera & Voice Translator, and Activation Code system).
+            Automated Android APK build for **AEGEA — Your Smart Guide** (Greek Hellenic Design, Email & Google Sign-In, Admin Subscriber Approval Dashboard, Live Camera & Voice Translator, and AI Travel Guide).
             Download `AEGEA-Smart-Guide.apk` below directly on your Android phone and tap to install.
           files: AEGEA-Smart-Guide.apk

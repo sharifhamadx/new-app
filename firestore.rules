@@ -38,16 +38,20 @@ service cloud.firestore {
       );
     }
 
-    // 3. Validation Blueprints
+    // 3. Validation Blueprints (synchronized verbatim with firebase-blueprint.json)
     function isValidUserProfile(data, userId) {
       return data.keys().hasAll([
           'uid', 'email', 'displayName', 'photoURL',
           'searchesRemaining', 'isPremium', 'subscriptionPlan',
+          'approvalStatus', 'requestedPlan', 'subscriptionExpiresAt',
+          'paymentNote', 'approvedBy', 'approvedAt',
           'termsAccepted', 'createdAt', 'updatedAt'
         ])
         && data.keys().hasOnly([
           'uid', 'email', 'displayName', 'photoURL',
           'searchesRemaining', 'isPremium', 'subscriptionPlan',
+          'approvalStatus', 'requestedPlan', 'subscriptionExpiresAt',
+          'paymentNote', 'approvedBy', 'approvedAt',
           'termsAccepted', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.uid)
@@ -58,6 +62,12 @@ service cloud.firestore {
         && data.searchesRemaining is int && data.searchesRemaining >= 0 && data.searchesRemaining <= 999999
         && data.isPremium is bool
         && data.subscriptionPlan in ['free', 'weekly_pass', 'monthly', 'annual']
+        && data.approvalStatus in ['pending', 'approved', 'rejected']
+        && data.requestedPlan in ['free', 'weekly_pass', 'monthly', 'annual']
+        && data.subscriptionExpiresAt is string && data.subscriptionExpiresAt.size() <= 40
+        && data.paymentNote is string && data.paymentNote.size() <= 300
+        && data.approvedBy is string && data.approvedBy.size() <= 200
+        && data.approvedAt is string && data.approvedAt.size() <= 40
         && data.termsAccepted is bool && data.termsAccepted == true;
     }
 
@@ -134,6 +144,7 @@ service cloud.firestore {
       allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
       allow list: if isAdmin();
 
+      // Every newly registered non-admin user MUST start pending admin approval & subscription payment
       allow create: if isValidId(userId)
         && isOwner(userId)
         && isValidUserProfile(incoming(), userId)
@@ -143,9 +154,18 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && (
           isAdmin() ||
-          (incoming().isPremium == false && incoming().subscriptionPlan == 'free' && incoming().searchesRemaining == 2)
+          (
+            incoming().approvalStatus == 'pending' &&
+            incoming().isPremium == false &&
+            incoming().subscriptionPlan == 'free' &&
+            incoming().searchesRemaining == 0 &&
+            incoming().subscriptionExpiresAt == '' &&
+            incoming().approvedBy == '' &&
+            incoming().approvedAt == ''
+          )
         );
 
+      // Strictly lock approvalStatus, isPremium, subscriptionPlan, searchesRemaining, approvedBy, approvedAt to Admin ONLY
       allow update: if isValidId(userId)
         && (isOwner(userId) || isAdmin())
         && isValidUserProfile(incoming(), userId)
@@ -156,20 +176,23 @@ service cloud.firestore {
         && (
           isAdmin() ||
           (
-            incoming().diff(existing()).affectedKeys().hasOnly(['searchesRemaining', 'updatedAt']) &&
-            incoming().searchesRemaining == existing().searchesRemaining - 1 &&
-            incoming().searchesRemaining >= 0
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'displayName', 'photoURL', 'requestedPlan', 'paymentNote', 'termsAccepted', 'updatedAt'
+            ])
           ) ||
           (
-            incoming().diff(existing()).affectedKeys().hasOnly(['isPremium', 'subscriptionPlan', 'searchesRemaining', 'updatedAt']) &&
-            incoming().isPremium == true &&
-            incoming().subscriptionPlan in ['weekly_pass', 'monthly', 'annual'] &&
-            incoming().searchesRemaining == 999999
-          ) ||
-          (
-            incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'termsAccepted', 'updatedAt'])
+            !('approvalStatus' in existing()) &&
+            incoming().approvalStatus == 'pending' &&
+            incoming().isPremium == false &&
+            incoming().subscriptionPlan == 'free' &&
+            incoming().searchesRemaining == 0 &&
+            incoming().subscriptionExpiresAt == '' &&
+            incoming().approvedBy == '' &&
+            incoming().approvedAt == ''
           )
         );
+
+      allow delete: if isValidId(userId) && isAdmin();
 
       match /searches/{searchId} {
         allow get: if isValidId(userId) && isValidId(searchId) && (isOwner(userId) || isAdmin());

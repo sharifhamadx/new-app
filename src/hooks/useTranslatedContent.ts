@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { translations } from '../translations';
 import { Language } from '../types';
-import { apiUrl } from '../utils/apiBase';
+import { apiFetch } from '../utils/sessionClient';
 
 export interface LanguageOption {
   code: string;
@@ -101,7 +101,7 @@ export async function translatePayloadDetailed<T>(
   }
 
   const doFetch = async () => {
-    const res = await fetch(apiUrl('/api/translate'), {
+    const res = await apiFetch('/api/translate', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -126,7 +126,7 @@ export async function translatePayloadDetailed<T>(
 
   let { res, text, parsed } = await doFetch();
   if ((!parsed && text.trim().toLowerCase().startsWith('<!doctype')) || (res.status >= 502 && res.status <= 504)) {
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await new Promise((resolve) => setTimeout(resolve, 1400));
     if (signal?.aborted) {
       throw new DOMException('Aborted', 'AbortError');
     }

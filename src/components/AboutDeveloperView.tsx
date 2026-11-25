@@ -8,9 +8,11 @@ import {
   adminRevokeCode,
   adminFetchInquiries,
   adminDeleteInquiry,
+  apiFetch,
   MaskedActivationCode,
   AdminInquiriesResponse,
 } from '../utils/sessionClient';
+import { SubscriberControlCenter } from './SubscriberDashboardModal';
 import {
   GraduationCap,
   Flag,
@@ -36,12 +38,14 @@ interface AboutDeveloperViewProps {
   currentLang: Language;
   user?: User | null;
   onOpenAdminLogin?: () => void;
+  onPendingCountChange?: (count: number) => void;
 }
 
 export const AboutDeveloperView: React.FC<AboutDeveloperViewProps> = ({
   currentLang,
   user,
   onOpenAdminLogin,
+  onPendingCountChange,
 }) => {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -173,11 +177,10 @@ export const AboutDeveloperView: React.FC<AboutDeveloperViewProps> = ({
     setErrorMsg(null);
 
     try {
-      const res = await fetch(apiUrl('/api/contact'), {
+      const res = await apiFetch('/api/contact', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Requested-With': 'AEGEA-App',
         },
         body: JSON.stringify({ name: name.trim(), email: email.trim(), message: message.trim() }),
       });
@@ -205,11 +208,10 @@ export const AboutDeveloperView: React.FC<AboutDeveloperViewProps> = ({
     setPartnerError(null);
 
     try {
-      const res = await fetch(apiUrl('/api/partner-inquiry'), {
+      const res = await apiFetch('/api/partner-inquiry', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Requested-With': 'AEGEA-App',
         },
         body: JSON.stringify({
           businessName: businessName.trim(),
@@ -241,39 +243,50 @@ export const AboutDeveloperView: React.FC<AboutDeveloperViewProps> = ({
 
   return (
     <div className="max-w-4xl mx-auto space-y-10 pb-16">
-      {/* Site Admin Exclusive Console: Activation Code Generator & Inbox */}
+      {/* Site Admin Exclusive Console: Subscriber Approvals, Activation Code Generator & Inbox */}
       {user?.isAdmin && (
-        <div className="rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-300 dark:border-emerald-800 p-6 sm:p-8 space-y-6">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2 text-emerald-900 dark:text-emerald-200">
-              <Shield className="w-5 h-5 shrink-0" />
-              <h2 className="font-editorial text-xl font-bold">{t.auth.adminBadge}</h2>
+        <div className="rounded-2xl bg-white dark:bg-[#0B1D36] border border-[#0D5EAF]/30 dark:border-[#163256] overflow-hidden shadow-sm">
+          <div className="aegean-meander-border w-full" />
+          <div className="p-6 sm:p-8 space-y-6">
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-4 border-b border-slate-200 dark:border-[#163256]">
+              <div className="flex items-center gap-2 text-[#082F5E] dark:text-white">
+                <Shield className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <h2 className="font-editorial text-xl font-bold">{t.auth.adminBadge}</h2>
+              </div>
+              <span className="text-xs font-bold text-emerald-700 dark:text-emerald-300 tabular-nums">
+                {user.email || t.monetization.unlimitedValue || '∞'}
+              </span>
             </div>
-            <span className="text-xs font-bold text-emerald-700 dark:text-emerald-300 tabular-nums">
-              {t.monetization.unlimitedValue || '∞'}
-            </span>
-          </div>
 
-          <p className="text-xs sm:text-sm text-emerald-900 dark:text-emerald-200 leading-relaxed">
-            {t.auth.adminWelcome}
-          </p>
+            <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+              {t.auth.adminWelcome}
+            </p>
 
-          {adminActionError && (
-            <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{adminActionError}</span>
+            {/* Subscriber Approval Control Center */}
+            <div className="p-4 sm:p-5 rounded-2xl bg-[#F7FAFE] dark:bg-[#061325] border border-slate-200 dark:border-[#163256]">
+              <SubscriberControlCenter
+                currentLang={currentLang}
+                currentUser={user}
+                onPendingCountChange={onPendingCountChange}
+              />
             </div>
-          )}
 
-          {/* VIP Activation Code Generator */}
-          <div className="bg-white dark:bg-slate-900 rounded-xl p-5 border border-slate-200 dark:border-slate-800 space-y-4">
-            <div className="flex items-center justify-between gap-2">
-              <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <KeyRound className="w-4 h-4 text-sky-700 dark:text-sky-400" />
-                <span>VIP Activation Code Generator</span>
-              </h3>
-              {isLoadingAdmin && <Loader2 className="w-4 h-4 animate-spin text-sky-600" />}
-            </div>
+            {adminActionError && (
+              <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{adminActionError}</span>
+              </div>
+            )}
+
+            {/* VIP Activation Code Generator */}
+            <div className="bg-[#F7FAFE] dark:bg-[#061325] rounded-xl p-5 border border-slate-200 dark:border-[#163256] space-y-4">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-sm font-bold text-[#082F5E] dark:text-white flex items-center gap-2">
+                  <KeyRound className="w-4 h-4 text-[#0D5EAF] dark:text-sky-400" />
+                  <span>VIP Activation Code Generator</span>
+                </h3>
+                {isLoadingAdmin && <Loader2 className="w-4 h-4 animate-spin text-[#0D5EAF]" />}
+              </div>
 
             <form onSubmit={handleGenerateCode} className="grid grid-cols-1 sm:grid-cols-4 gap-3">
               <input
@@ -453,15 +466,16 @@ export const AboutDeveloperView: React.FC<AboutDeveloperViewProps> = ({
               )}
             </div>
           </div>
+          </div>
         </div>
       )}
 
       {/* Profile Header */}
-      <div className="rounded-2xl bg-slate-900 text-white p-8 sm:p-10 border border-slate-800">
+      <div className="rounded-2xl bg-[#082F5E] text-white p-8 sm:p-10 border border-[#163256]">
         <div className="flex flex-col md:flex-row items-center gap-8 text-center md:text-start">
-          <div className="w-28 h-28 sm:w-32 sm:h-32 rounded-2xl bg-slate-800 border border-slate-700 flex flex-col items-center justify-center shrink-0">
+          <div className="w-28 h-28 sm:w-32 sm:h-32 rounded-2xl bg-[#0B1D36] border border-[#0D5EAF]/40 flex flex-col items-center justify-center shrink-0">
             <span className="font-editorial text-4xl font-bold text-amber-300">SH</span>
-            <span className="text-[11px] font-medium text-slate-300 mt-1">{t.developer.name}</span>
+            <span className="text-[11px] font-medium text-sky-100 mt-1">{t.developer.name}</span>
           </div>
 
           <div className="space-y-4 flex-1">

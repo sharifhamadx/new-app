@@ -522,8 +522,8 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
   };
 
   const handleSearch = async () => {
-    if (user && !user.isAdmin && !user.isPremium && user.searchesRemaining <= 0) {
-      onOpenPremium();
+    if (!user || (!user.isAdmin && !user.isPremium)) {
+      onOpenSignIn();
       return;
     }
 
@@ -560,7 +560,7 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
 
       const callRecommendApi = async () => {
         const controller = new AbortController();
-        const timeoutId = window.setTimeout(() => controller.abort(), 36000);
+        const timeoutId = window.setTimeout(() => controller.abort(), 52000);
         try {
           const res = await apiFetch('/api/recommend', {
             method: 'POST',
@@ -603,7 +603,7 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
           }
         } catch (fetchErr: any) {
           const elapsed = Date.now() - attemptStart;
-          const isTimeoutOrLongDrop = fetchErr?.name === 'AbortError' || elapsed >= 24000;
+          const isTimeoutOrLongDrop = fetchErr?.name === 'AbortError' || elapsed >= 45000;
           if (attempt === retryDelays.length || isTimeoutOrLongDrop) {
             throw fetchErr;
           }
@@ -619,8 +619,8 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
       }
 
       if (!response || !response.ok) {
-        if (response?.status === 403 && data?.codeRequired) {
-          onOpenPremium();
+        if (response?.status === 403 && (data?.approvalRequired || data?.codeRequired)) {
+          onOpenSignIn();
         }
         const rawErr = String(data.error || '');
         const cleanErr = rawErr && !rawErr.includes('{') ? rawErr : t.matchmaker.searchFailedError;
@@ -1479,19 +1479,21 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
     <div className="space-y-12 pb-16">
       {/* 2-Column Editorial Hero */}
       <section className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch print:hidden">
-        <div className="lg:col-span-7 flex flex-col justify-between bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 sm:p-10 space-y-6">
+        <div className="lg:col-span-7 flex flex-col justify-between bg-white dark:bg-[#0B1D36] rounded-2xl border border-slate-200 dark:border-[#163256] overflow-hidden">
+          <div className="aegean-meander-border w-full" />
+          <div className="p-6 sm:p-10 space-y-6 flex-1 flex flex-col justify-between">
           <div className="space-y-4">
             <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
               <span>{todayFormatted}</span>
               <span aria-hidden="true">·</span>
-              <span className="text-sky-700 dark:text-sky-400 font-semibold">
+              <span className="text-[#0D5EAF] dark:text-sky-400 font-bold">
                 {t.matchmaker.heroKicker}
               </span>
               <span aria-hidden="true">·</span>
               <span>{t.matchmaker.allDevicesTag}</span>
             </div>
 
-            <h1 className="font-editorial text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight text-slate-900 dark:text-white leading-tight text-balance">
+            <h1 className="font-editorial text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight text-[#082F5E] dark:text-white leading-tight text-balance">
               {t.matchmaker.heroTitle}
             </h1>
 
@@ -1504,7 +1506,7 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
                 <button
                   type="button"
                   onClick={onOpenTranslator}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-sky-50 dark:bg-slate-800 hover:bg-sky-100 dark:hover:bg-slate-700 text-sky-800 dark:text-sky-300 text-xs sm:text-sm font-semibold border border-sky-200/80 dark:border-slate-700 transition-colors cursor-pointer"
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-sky-50 dark:bg-[#061325] hover:bg-sky-100 dark:hover:bg-[#082F5E] text-[#0D5EAF] dark:text-sky-300 text-xs sm:text-sm font-semibold border border-[#0D5EAF]/25 dark:border-[#163256] transition-colors cursor-pointer"
                 >
                   <Languages className="w-4 h-4 shrink-0" />
                   <span>{t.nav.translator || 'Live Translator'}</span>
@@ -1513,34 +1515,35 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
             )}
           </div>
 
-          {/* User Quota / Sign-In Bar */}
-          <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-4">
-            {user ? (
+          {/* Account / Approval Status Bar */}
+          <div className="pt-4 border-t border-slate-100 dark:border-[#163256] flex flex-wrap items-center justify-between gap-4">
+            {user && !user.isGuest ? (
               user.isAdmin ? (
-                <p className="text-xs sm:text-sm font-semibold text-sky-700 dark:text-sky-400">
+                <p className="text-xs sm:text-sm font-bold text-emerald-700 dark:text-emerald-400">
                   {t.matchmaker.adminUnlimitedNotice}
                 </p>
               ) : user.isPremium ? (
-                <p className="text-xs sm:text-sm font-semibold text-amber-600 dark:text-amber-400">
+                <p className="text-xs sm:text-sm font-bold text-[#0D5EAF] dark:text-sky-300">
                   {t.matchmaker.vipUnlimitedNotice}
                 </p>
               ) : (
-                <div className="flex flex-wrap items-center gap-3 text-xs sm:text-sm">
-                  <span className="font-semibold text-slate-800 dark:text-slate-200 tabular-nums">
-                    {user.searchesRemaining > 0
-                      ? String(t.monetization.freeSearchesLeftTemplate || '{count} / 2').replace(
-                          '{count}',
-                          String(user.searchesRemaining)
-                        )
-                      : t.monetization.outOfSearchesTitle}
+                <div className="flex flex-wrap items-center justify-between gap-3 w-full">
+                  <span className="text-xs sm:text-sm font-semibold text-amber-800 dark:text-amber-300">
+                    {user.emailVerified === false
+                      ? t.auth.verifyEmailTitle
+                      : user.approvalStatus === 'rejected'
+                      ? t.auth.rejectedTitle
+                      : t.auth.pendingApprovalTitle}
                   </span>
-                  <button
-                    type="button"
-                    onClick={onOpenPremium}
-                    className="text-sky-700 dark:text-sky-400 font-bold underline hover:text-sky-800 cursor-pointer"
-                  >
-                    {t.monetization.upgradeButton}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={onOpenSignIn}
+                      className="px-3.5 py-2 bg-[#0D5EAF] hover:bg-[#0A4A8B] text-white rounded-lg text-xs font-bold whitespace-nowrap cursor-pointer"
+                    >
+                      {t.auth.subscribeWhatsappBtn}
+                    </button>
+                  </div>
                 </div>
               )
             ) : (
@@ -1551,17 +1554,18 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
                 <button
                   type="button"
                   onClick={onOpenSignIn}
-                  className="px-4 py-2 bg-sky-700 hover:bg-sky-800 text-white rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 transition-colors cursor-pointer"
+                  className="px-4 py-2 bg-[#0D5EAF] hover:bg-[#0A4A8B] text-white rounded-lg text-xs font-bold whitespace-nowrap shrink-0 transition-colors cursor-pointer"
                 >
                   {t.auth.signInWithGoogle}
                 </button>
               </div>
             )}
           </div>
+          </div>
         </div>
 
         {/* Hero Photography */}
-        <div className="lg:col-span-5 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-900 min-h-[240px]">
+        <div className="lg:col-span-5 rounded-2xl overflow-hidden border border-slate-200 dark:border-[#163256] bg-slate-100 dark:bg-[#0B1D36] min-h-[240px]">
           <img
             src={HERO_IMAGE}
             alt="Authentic seaside Greek taverna overlooking the Aegean Sea"
@@ -1571,7 +1575,7 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
       </section>
 
       {/* Structured City + Preferred Food + Comprehensive Guide Search Console */}
-      <section className="bg-white dark:bg-slate-900 rounded-2xl p-6 sm:p-8 border border-slate-200 dark:border-slate-800 space-y-6 print:hidden">
+      <section className="bg-white dark:bg-[#0B1D36] rounded-2xl p-6 sm:p-8 border border-slate-200 dark:border-[#163256] space-y-6 print:hidden">
         {errorMsg && (
           <div className="p-4 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs sm:text-sm flex items-start justify-between gap-3">
             <div className="flex items-start gap-2.5">
@@ -1732,31 +1736,48 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
 
         {/* Submit Search Action */}
         <div className="pt-1">
-          {user && !user.isAdmin && !user.isPremium && user.searchesRemaining <= 0 ? (
-            <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          {!user || (!user.isAdmin && !user.isPremium) ? (
+            <div className="p-4 rounded-xl bg-amber-50/90 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
               <div className="space-y-1">
-                <p className="text-xs font-bold text-amber-950 dark:text-amber-200 flex items-center gap-1.5">
-                  <Lock className="w-4 h-4 text-amber-700 dark:text-amber-400" />
-                  <span>{t.monetization.outOfSearchesTitle}</span>
+                <p className="text-xs sm:text-sm font-bold text-[#082F5E] dark:text-amber-200 flex items-center gap-1.5">
+                  <Lock className="w-4 h-4 text-amber-700 dark:text-amber-400 shrink-0" />
+                  <span>
+                    {user && !user.isGuest
+                      ? user.emailVerified === false
+                        ? t.auth.verifyEmailTitle
+                        : t.auth.pendingApprovalTitle
+                      : t.auth.notSignedIn}
+                  </span>
                 </p>
-                <p className="text-xs text-amber-900 dark:text-amber-300">
-                  {t.monetization.outOfSearchesDesc}
+                <p className="text-xs text-slate-700 dark:text-amber-200/90 leading-relaxed">
+                  {user && !user.isGuest
+                    ? t.auth.pendingApprovalDesc
+                    : t.auth.signInPrompt}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={onOpenPremium}
-                className="w-full sm:w-auto px-5 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold whitespace-nowrap shrink-0 transition-colors cursor-pointer"
-              >
-                {t.monetization.upgradeButton}
-              </button>
+              <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto shrink-0">
+                <button
+                  type="button"
+                  onClick={onOpenSignIn}
+                  className="flex-1 sm:flex-initial px-5 py-2.5 bg-[#0D5EAF] hover:bg-[#0A4A8B] text-white rounded-xl text-xs font-bold whitespace-nowrap transition-colors cursor-pointer"
+                >
+                  {user && !user.isGuest ? t.auth.subscribeWhatsappBtn : t.auth.signInWithGoogle}
+                </button>
+                <button
+                  type="button"
+                  onClick={onOpenPremium}
+                  className="px-4 py-2.5 bg-white dark:bg-[#061325] border border-amber-300 dark:border-amber-700 text-[#082F5E] dark:text-amber-200 rounded-xl text-xs font-bold whitespace-nowrap transition-colors cursor-pointer"
+                >
+                  {t.auth.vipTabLabel || 'VIP Code'}
+                </button>
+              </div>
             </div>
           ) : (
             <button
               type="button"
               disabled={isLoading}
               onClick={handleSearch}
-              className="w-full py-3.5 px-6 bg-sky-700 hover:bg-sky-800 disabled:opacity-60 text-white rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              className="w-full py-3.5 px-6 bg-[#0D5EAF] hover:bg-[#0A4A8B] disabled:opacity-60 text-white rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer shadow-sm"
             >
               {isLoading ? (
                 <>

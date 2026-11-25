@@ -1,4 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { onAuthStateChanged } from 'firebase/auth';
+import { Capacitor } from '@capacitor/core';
+import { App as CapacitorApp } from '@capacitor/app';
+import { Browser } from '@capacitor/browser';
 import {
   Language,
   User,
@@ -8,10 +12,24 @@ import {
   HealthProfile,
 } from './types';
 import {
+  auth,
+  firebaseSignOut,
+  reloadCurrentFirebaseUser,
+  resendVerificationEmail,
+  signInWithGoogleMobileTokens,
+  subscribeUserProfile,
+  syncSignedInUserProfile,
+  adminListSubscribers,
+  isAdminEmail,
+} from './firebase';
+import {
   fetchSessionState,
   signOutSession,
+  warmUpBackendIfNative,
 } from './utils/sessionClient';
 import { Navbar } from './components/Navbar';
+import { AccountStatusBanner } from './components/AccountStatusBanner';
+import { SubscriberDashboardModal } from './components/SubscriberDashboardModal';
 import { MatchmakerView } from './components/MatchmakerView';
 import { LiveTranslatorView } from './components/LiveTranslatorView';
 import { ExploreView } from './components/ExploreView';
@@ -31,6 +49,21 @@ import { isRtlLanguage, useUiTranslation } from './hooks/useTranslatedContent';
 
 const FAVORITES_STORAGE_KEY = 'aegea_favorites_v2';
 const HEALTH_PROFILE_STORAGE_KEY = 'aegea_health_profile_v1';
+
+const GUEST_USER: User = {
+  uid: 'guest_explorer',
+  name: 'Guest Explorer',
+  email: '',
+  avatar: '',
+  searchesRemaining: 0,
+  isPremium: false,
+  termsAccepted: false,
+  isAdmin: false,
+  isGuest: true,
+  emailVerified: false,
+  approvalStatus: 'pending',
+  subscriptionPlan: 'free',
+};
 
 function loadStoredHealthProfile(): HealthProfile {
   try {
@@ -88,15 +121,19 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [adminSetupRequired, setAdminSetupRequired] = useState(false);
+  const [pendingSubscribersCount, setPendingSubscribersCount] = useState(0);
 
   const [favorites, setFavorites] = useState<FavoriteItem[]>(() => loadStoredFavorites());
   const [healthProfile, setHealthProfile] = useState<HealthProfile>(() => loadStoredHealthProfile());
 
   const [isSignInOpen, setIsSignInOpen] = useState(false);
-  const [signInInitialTab, setSignInInitialTab] = useState<'vip' | 'admin'>('vip');
+  const [signInInitialTab, setSignInInitialTab] = useState<'account' | 'vip' | 'admin'>('account');
+  const [isSubscriberDashboardOpen, setIsSubscriberDashboardOpen] = useState(false);
   const [isTermsOpen, setIsTermsOpen] = useState(false);
   const [isPremiumOpen, setIsPremiumOpen] = useState(false);
   const [isHealthOpen, setIsHealthOpen] = useState(false);
+
+  const profileUnsubRef = useRef<(() => void) | null>(null);
 
   // Sync dark mode class on root HTML
   useEffect(() => {
@@ -126,20 +163,153 @@ export default function App() {
     }
   }, [favorites]);
 
-  // Initialize server-verified Guest Trial or restored VIP/Admin session without requiring Google login
+  // Pre-warm Render backend if running as native APK or web client
+  useEffect(() => {
+    void warmUpBackendIfNative();
+  }, []);
+
+  // Native Capacitor Google Sign-In Deep Link callback handler (com.aegea.smartguide://auth)
+  useEffect(() => {
+    let isNative = false;
+    try {
+      isNative = Capacitor.isNativePlatform();
+    } catch {
+      isNative = false;
+    }
+    if (!isNative) return;
+
+    let removed = false;
+    let listenerHandle: { remove: () => Promise<void> } | null = null;
+
+    CapacitorApp.addListener('appUrlOpen', async ({ url }) => {
+      if (!url || !url.startsWith('com.aegea.smartguide://auth')) return;
+      try {
+        await Browser.close().catch(() => {});
+        const queryPart = url.split('?')[1] || '';
+        const params = new URLSearchParams(queryPart.split('#')[0]);
+        const idToken = params.get('idToken');
+        const accessToken = params.get('accessToken');
+        if (idToken || accessToken) {
+          const fbUser = await signInWithGoogleMobileTokens(idToken, accessToken);
+          await syncSignedInUserProfile(fbUser);
+          setIsSignInOpen(false);
+        }
+      } catch (err) {
+        console.error('Native mobile Google auth callback error:', err);
+      }
+    }).then((handle) => {
+      if (removed) {
+        void handle.remove();
+      } else {
+        listenerHandle = handle;
+      }
+    });
+
+    return () => {
+      removed = true;
+      if (listenerHandle) {
+        void listenerHandle.remove();
+      }
+    };
+  }, []);
+
+  const refreshPendingSubscribersCount = useCallback(async () => {
+    try {
+      const list = await adminListSubscribers();
+      const count = list.filter((u) => !isAdminEmail(u.email) && u.approvalStatus === 'pending').length;
+      setPendingSubscribersCount(count);
+    } catch {
+      // ignore non-critical pending count errors
+    }
+  }, []);
+
+  // Primary Auth Lifecycle: Firebase Auth (Email + Google) with real-time Firestore approval sync,
+  // plus fallback check for VIP Activation Code / Admin Backup Passcode session.
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+
+    const unsubscribeAuth = onAuthStateChanged(auth, async (fbUser) => {
+      if (profileUnsubRef.current) {
+        profileUnsubRef.current();
+        profileUnsubRef.current = null;
+      }
+
+      if (fbUser) {
+        try {
+          const synced = await syncSignedInUserProfile(fbUser);
+          if (cancelled) return;
+          setUser(synced);
+
+          if (fbUser.emailVerified) {
+            profileUnsubRef.current = subscribeUserProfile(
+              fbUser.uid,
+              true,
+              (liveUser) => {
+                if (!cancelled) {
+                  setUser(liveUser);
+                }
+              },
+              (err) => {
+                console.warn('Firestore profile listener error:', err);
+              }
+            );
+          }
+
+          if (synced.isAdmin) {
+            void refreshPendingSubscribersCount();
+          } else {
+            setPendingSubscribersCount(0);
+          }
+
+          // Also fetch adminSetupRequired status & server health profile safely in background
+          fetchSessionState()
+            .then((session) => {
+              if (cancelled) return;
+              setAdminSetupRequired(session.adminSetupRequired);
+              const srvHealth = session.user?.healthProfile;
+              if (srvHealth && (srvHealth.conditions.length > 0 || srvHealth.allergiesOrNotes)) {
+                setHealthProfile(srvHealth);
+                try {
+                  localStorage.setItem(HEALTH_PROFILE_STORAGE_KEY, JSON.stringify(srvHealth));
+                } catch {
+                  // ignore quota
+                }
+              }
+            })
+            .catch(() => {});
+        } catch (err) {
+          console.error('Firebase profile sync failed:', err);
+          if (!cancelled) {
+            setUser({
+              ...GUEST_USER,
+              uid: fbUser.uid,
+              email: fbUser.email || '',
+              name: fbUser.displayName || fbUser.email || 'Traveler',
+              isGuest: false,
+              emailVerified: fbUser.emailVerified,
+              approvalStatus: 'pending',
+            });
+          }
+        } finally {
+          if (!cancelled) {
+            setAuthReady(true);
+          }
+        }
+        return;
+      }
+
+      // No Firebase user signed in — check if VIP Activation Code or Admin Passcode HMAC session exists
       try {
         const session = await fetchSessionState();
         if (!cancelled) {
-          setUser(session.user);
           setAdminSetupRequired(session.adminSetupRequired);
+          if (session.user?.isAdmin || session.user?.isPremium) {
+            setUser(session.user);
+          } else {
+            setUser(GUEST_USER);
+          }
           const srvHealth = session.user?.healthProfile;
-          if (
-            srvHealth &&
-            (srvHealth.conditions.length > 0 || srvHealth.allergiesOrNotes)
-          ) {
+          if (srvHealth && (srvHealth.conditions.length > 0 || srvHealth.allergiesOrNotes)) {
             setHealthProfile(srvHealth);
             try {
               localStorage.setItem(HEALTH_PROFILE_STORAGE_KEY, JSON.stringify(srvHealth));
@@ -150,35 +320,35 @@ export default function App() {
         }
       } catch {
         if (!cancelled) {
-          setUser({
-            uid: 'guest_offline',
-            name: 'Guest Explorer',
-            email: '',
-            avatar: '',
-            searchesRemaining: 2,
-            isPremium: false,
-            termsAccepted: false,
-            isAdmin: false,
-            isGuest: true,
-            subscriptionPlan: 'free',
-          });
+          setUser(GUEST_USER);
         }
       } finally {
         if (!cancelled) {
           setAuthReady(true);
         }
       }
-    })();
+    });
 
     return () => {
       cancelled = true;
+      unsubscribeAuth();
+      if (profileUnsubRef.current) {
+        profileUnsubRef.current();
+        profileUnsubRef.current = null;
+      }
     };
-  }, []);
+  }, [refreshPendingSubscribersCount]);
 
-  const handleSessionUpdated = useCallback((nextUser: User, nextAdminSetup: boolean) => {
-    setUser(nextUser);
-    setAdminSetupRequired(nextAdminSetup);
-  }, []);
+  const handleSessionUpdated = useCallback(
+    (nextUser: User, nextAdminSetup: boolean) => {
+      setUser(nextUser);
+      setAdminSetupRequired(nextAdminSetup);
+      if (nextUser.isAdmin) {
+        void refreshPendingSubscribersCount();
+      }
+    },
+    [refreshPendingSubscribersCount]
+  );
 
   const handleSaveHealthProfile = useCallback((nextProfile: HealthProfile, updatedUser?: User) => {
     setHealthProfile(nextProfile);
@@ -192,18 +362,49 @@ export default function App() {
     }
   }, []);
 
-  const handleSignOut = async () => {
-    try {
-      const res = await signOutSession();
-      setUser(res.user);
-      setAdminSetupRequired(res.adminSetupRequired);
-    } catch {
-      // ignore signout network errors
+  const handleRefreshAccountStatus = useCallback(async () => {
+    const freshFb = await reloadCurrentFirebaseUser();
+    if (freshFb) {
+      const synced = await syncSignedInUserProfile(freshFb);
+      setUser(synced);
+      if (synced.isAdmin) {
+        void refreshPendingSubscribersCount();
+      }
+      return;
     }
+    try {
+      const session = await fetchSessionState();
+      setAdminSetupRequired(session.adminSetupRequired);
+      if (session.user?.isAdmin || session.user?.isPremium) {
+        setUser(session.user);
+      }
+    } catch {
+      // ignore transient error
+    }
+  }, [refreshPendingSubscribersCount]);
+
+  const handleResendVerification = useCallback(async () => {
+    await resendVerificationEmail();
+  }, []);
+
+  const handleSignOut = async () => {
+    if (profileUnsubRef.current) {
+      profileUnsubRef.current();
+      profileUnsubRef.current = null;
+    }
+    await Promise.allSettled([firebaseSignOut(), signOutSession()]);
+    setPendingSubscribersCount(0);
+    setIsSubscriberDashboardOpen(false);
+    setUser(GUEST_USER);
   };
 
   const handleToggleTheme = () => {
     setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
+  };
+
+  const handleOpenAccountModal = () => {
+    setSignInInitialTab('account');
+    setIsSignInOpen(true);
   };
 
   const handleOpenVipModal = () => {
@@ -249,15 +450,18 @@ export default function App() {
   }, []);
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 selection:bg-sky-600 selection:text-white transition-colors duration-200">
+    <div className="min-h-screen flex flex-col bg-[#F7FAFE] dark:bg-[#061325] text-[#082F5E] dark:text-slate-100 selection:bg-[#0D5EAF] selection:text-white transition-colors duration-200">
       <Navbar
         currentLang={currentLang}
         onLanguageChange={setCurrentLang}
         user={user}
         authReady={authReady}
-        onOpenSignIn={handleOpenVipModal}
+        onOpenSignIn={handleOpenAccountModal}
+        onOpenVipCode={handleOpenVipModal}
         onSignOut={handleSignOut}
         onOpenPremium={() => setIsPremiumOpen(true)}
+        onOpenSubscriberDashboard={() => setIsSubscriberDashboardOpen(true)}
+        pendingSubscribersCount={pendingSubscribersCount}
         activeTab={activeTab}
         onTabChange={setActiveTab}
         theme={theme}
@@ -267,6 +471,17 @@ export default function App() {
         onOpenHealthSettings={() => setIsHealthOpen(true)}
       />
 
+      <AccountStatusBanner
+        currentLang={currentLang}
+        user={user}
+        authReady={authReady}
+        pendingSubscribersCount={pendingSubscribersCount}
+        onOpenSignIn={handleOpenAccountModal}
+        onOpenSubscriberDashboard={() => setIsSubscriberDashboardOpen(true)}
+        onRefreshStatus={handleRefreshAccountStatus}
+        onResendVerification={handleResendVerification}
+      />
+
       <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 sm:pt-8 w-full">
         {activeTab === 'matchmaker' && (
           <MatchmakerView
@@ -274,7 +489,7 @@ export default function App() {
             user={user}
             favorites={favorites}
             onToggleFavorite={handleToggleFavorite}
-            onOpenSignIn={handleOpenVipModal}
+            onOpenSignIn={handleOpenAccountModal}
             onOpenPremium={() => setIsPremiumOpen(true)}
             onOpenPartner={() => {
               setActiveTab('about');
@@ -290,7 +505,13 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'translator' && <LiveTranslatorView currentLang={currentLang} />}
+        {activeTab === 'translator' && (
+          <LiveTranslatorView
+            currentLang={currentLang}
+            user={user}
+            onOpenSignIn={handleOpenAccountModal}
+          />
+        )}
 
         {activeTab === 'explore' && (
           <ExploreView
@@ -328,7 +549,7 @@ export default function App() {
             user={user}
             favorites={favorites}
             onRemoveFavorite={handleRemoveFavorite}
-            onOpenSignIn={handleOpenVipModal}
+            onOpenSignIn={handleOpenAccountModal}
             onGoToMatchmaker={() => setActiveTab('matchmaker')}
           />
         )}
@@ -338,6 +559,7 @@ export default function App() {
             currentLang={currentLang}
             user={user}
             onOpenAdminLogin={handleOpenAdminModal}
+            onPendingCountChange={setPendingSubscribersCount}
           />
         )}
 
@@ -362,6 +584,14 @@ export default function App() {
         initialTab={signInInitialTab}
         adminSetupRequired={adminSetupRequired}
         onSessionUpdated={handleSessionUpdated}
+      />
+
+      <SubscriberDashboardModal
+        isOpen={isSubscriberDashboardOpen}
+        onClose={() => setIsSubscriberDashboardOpen(false)}
+        currentLang={currentLang}
+        currentUser={user}
+        onPendingCountChange={setPendingSubscribersCount}
       />
 
       <TermsModal

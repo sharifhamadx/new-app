@@ -59,13 +59,15 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
 
   return (
     <div className="space-y-8 pb-16">
-      <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 sm:p-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="bg-white dark:bg-[#0B1D36] rounded-2xl border border-slate-200 dark:border-[#163256] overflow-hidden">
+        <div className="aegean-meander-border w-full" />
+        <div className="p-6 sm:p-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="space-y-1.5">
-          <div className="flex items-center gap-2 text-sky-700 dark:text-sky-400 text-xs font-semibold">
+          <div className="flex items-center gap-2 text-[#0D5EAF] dark:text-sky-400 text-xs font-bold">
             <Heart className="w-4 h-4 fill-rose-500 text-rose-500" />
             <span>{t.navbar.syncedDevicesLabel}</span>
           </div>
-          <h1 className="font-editorial text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">
+          <h1 className="font-editorial text-2xl sm:text-3xl font-bold text-[#082F5E] dark:text-white">
             {t.favorites?.title || 'Saved Greece Trip Favorites'}
           </h1>
           <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300">
@@ -74,8 +76,9 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
           </p>
         </div>
 
-        <div className="text-xs font-bold text-slate-700 dark:text-slate-200 tabular-nums px-4 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 self-start sm:self-center">
+        <div className="text-xs font-bold text-[#082F5E] dark:text-slate-200 tabular-nums px-4 py-2 rounded-xl bg-[#F7FAFE] dark:bg-[#061325] border border-slate-200 dark:border-[#163256] self-start sm:self-center">
           {favorites.length} {t.favorites?.countLabel || 'Saved'}
+        </div>
         </div>
       </div>
 
@@ -95,8 +98,8 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
                 onClick={() => setFilterType(typeKey)}
                 className={`px-3.5 py-2 rounded-xl text-xs font-semibold border transition-colors cursor-pointer ${
                   active
-                    ? 'bg-sky-700 text-white border-sky-700'
-                    : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800'
+                    ? 'bg-[#0D5EAF] text-white border-[#0D5EAF]'
+                    : 'bg-white dark:bg-[#0B1D36] text-slate-700 dark:text-slate-200 border-slate-200 dark:border-[#163256] hover:bg-slate-50 dark:hover:bg-[#082F5E]'
                 }`}
               >
                 {label}
@@ -107,10 +110,10 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
       )}
 
       {filtered.length === 0 ? (
-        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-10 text-center space-y-4">
+        <div className="bg-white dark:bg-[#0B1D36] rounded-2xl border border-slate-200 dark:border-[#163256] p-10 text-center space-y-4">
           <Heart className="w-8 h-8 text-slate-400 mx-auto" />
           <div className="space-y-1">
-            <h2 className="font-bold text-lg text-slate-900 dark:text-white">
+            <h2 className="font-bold text-lg text-[#082F5E] dark:text-white">
               {t.favorites?.emptyTitle || 'No saved places yet'}
             </h2>
             <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 max-w-md mx-auto">
@@ -121,7 +124,7 @@ export const FavoritesView: React.FC<FavoritesViewProps> = ({
           <button
             type="button"
             onClick={onGoToMatchmaker}
-            className="px-5 py-2.5 bg-sky-700 hover:bg-sky-800 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
+            className="px-5 py-2.5 bg-[#0D5EAF] hover:bg-[#0A4A8B] text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
           >
             {t.favorites?.exploreNowBtn || 'Search Greece Guide'}
           </button>

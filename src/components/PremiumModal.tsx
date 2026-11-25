@@ -45,7 +45,9 @@ export const PremiumModal: React.FC<PremiumModalProps> = ({
   if (!isOpen) return null;
 
   const whatsappSubscribeUrl = apiUrl(
-    `/api/subscribe-whatsapp?plan=${encodeURIComponent(selectedPlan)}&lang=${encodeURIComponent(currentLang)}`
+    `/api/subscribe-whatsapp?plan=${encodeURIComponent(selectedPlan)}&lang=${encodeURIComponent(currentLang)}${
+      user?.email ? `&email=${encodeURIComponent(user.email)}` : ''
+    }`
   );
 
   const confirmText =
@@ -88,13 +90,14 @@ export const PremiumModal: React.FC<PremiumModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 overflow-y-auto bg-[#061325]/75 backdrop-blur-xs flex items-center justify-center p-4"
       role="dialog"
       aria-modal="true"
     >
-      <div className="relative w-full max-w-2xl bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+      <div className="relative w-full max-w-2xl bg-white dark:bg-[#0B1D36] rounded-2xl shadow-2xl border border-slate-200 dark:border-[#163256] overflow-hidden">
+        <div className="aegean-meander-border w-full" />
         {/* Header */}
-        <div className="px-6 py-5 bg-slate-900 text-white border-b border-slate-800 flex items-start justify-between gap-4">
+        <div className="px-6 py-5 bg-[#082F5E] text-white border-b border-[#163256] flex items-start justify-between gap-4">
           <div className="space-y-1">
             <div className="flex items-center gap-1.5 text-amber-400 text-xs font-semibold">
               <Crown className="w-4 h-4" />
@@ -300,7 +303,7 @@ export const PremiumModal: React.FC<PremiumModalProps> = ({
                 <button
                   type="submit"
                   disabled={processing}
-                  className="px-4 py-2.5 rounded-xl bg-sky-700 hover:bg-sky-800 disabled:opacity-60 text-white text-xs font-bold flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
+                  className="px-4 py-2.5 rounded-xl bg-[#0D5EAF] hover:bg-[#0A4A8B] disabled:opacity-60 text-white text-xs font-bold flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
                 >
                   {processing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <KeyRound className="w-3.5 h-3.5" />}
                   <span>{t.auth.activateCodeBtn}</span>

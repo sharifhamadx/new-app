@@ -1,6 +1,7 @@
 export type Language = string;
 export type Theme = 'light' | 'dark';
 export type SubscriptionPlan = 'weekly_pass' | 'monthly' | 'annual';
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected';
 export type GuideCategory = 'all' | 'tavernas' | 'hotels' | 'archaeological';
 export type AtmospherePreference =
   | 'any'
@@ -41,10 +42,35 @@ export interface User {
   termsAccepted: boolean;
   isAdmin?: boolean;
   isGuest?: boolean;
+  emailVerified?: boolean;
+  approvalStatus?: ApprovalStatus;
+  requestedPlan?: 'free' | SubscriptionPlan;
+  paymentNote?: string;
   subscriptionPlan?: 'free' | SubscriptionPlan;
   planExpiresAt?: string | null;
+  approvedBy?: string;
+  approvedAt?: string | null;
   codeHint?: string | null;
   healthProfile?: HealthProfile;
+}
+
+export interface FirestoreUserRecord {
+  uid: string;
+  email: string;
+  displayName: string;
+  photoURL: string;
+  searchesRemaining: number;
+  isPremium: boolean;
+  subscriptionPlan: 'free' | SubscriptionPlan;
+  approvalStatus: ApprovalStatus;
+  requestedPlan: 'free' | SubscriptionPlan;
+  subscriptionExpiresAt: string;
+  paymentNote: string;
+  approvedBy: string;
+  approvedAt: string;
+  termsAccepted: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface TavernaRecommendation {
