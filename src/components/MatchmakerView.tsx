@@ -240,8 +240,9 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
   const [recentSearches, setRecentSearches] = useState<SearchHistoryRecord[]>([]);
   const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
 
-  // VIP 3-Day Itinerary & Executive PDF state
+  // VIP 1-Day / 7-Day Itinerary & Executive PDF state
   const [itinerary, setItinerary] = useState<TripItinerary | null>(null);
+  const [itineraryDurationDays, setItineraryDurationDays] = useState<1 | 7>(1);
   const [isGeneratingItinerary, setIsGeneratingItinerary] = useState(false);
   const [isTranslatingItinerary, setIsTranslatingItinerary] = useState(false);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
@@ -467,11 +468,12 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
     return () => controller.abort();
   }, [currentLang, result]);
 
-  // Automatically translate generated 3-day itinerary when language changes
+  // Automatically translate generated itinerary when language changes
   useEffect(() => {
     if (!itinerary) return;
     const normLang = String(currentLang || 'en').trim().toLowerCase();
-    const cached = itineraryCacheRef.current[normLang];
+    const scopeKey = `${normLang}:${itinerary.days?.length || itineraryDurationDays}`;
+    const cached = itineraryCacheRef.current[scopeKey];
     if (cached) {
       if (itinerary !== cached) {
         setItinerary(cached);
@@ -486,7 +488,7 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
     translatePayloadDetailed(itinerary, currentLang, 'itinerary', undefined, controller.signal)
       .then(({ translated, quotaLimited }) => {
         if (!quotaLimited) {
-          itineraryCacheRef.current[normLang] = translated;
+          itineraryCacheRef.current[scopeKey] = translated;
           setItinerary(translated);
         }
       })
@@ -502,7 +504,7 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
       });
 
     return () => controller.abort();
-  }, [currentLang, itinerary]);
+  }, [currentLang, itinerary, itineraryDurationDays]);
 
   const citiesList = CITY_KEYS.map((key) => ({
     value: key,
@@ -786,30 +788,33 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
     }
   };
 
-  const handleGenerateItinerary = async () => {
+  const handleGenerateItinerary = async (overrideDays?: 1 | 7) => {
     if (!user?.isPremium && !user?.isAdmin) {
       onOpenPremium();
       return;
     }
     if (!result) return;
 
+    const targetDays = overrideDays || itineraryDurationDays;
     setIsGeneratingItinerary(true);
     setItineraryError(null);
 
     try {
       const selectedCityObj = citiesList.find((c) => c.value === city) || citiesList[0];
       const selectedFoodObj = foodTypesList.find((f) => f.value === foodType) || foodTypesList[0];
+      const activeRegionCity = customCity.trim() || selectedCityObj.value;
       const payloadBody = JSON.stringify({
-        city: selectedCityObj.value,
+        city: activeRegionCity,
         foodType: selectedFoodObj.label,
         language: getLanguageEnglishName(currentLang),
+        durationDays: targetDays,
         guideResult: result,
         healthProfile,
       });
 
       const callItineraryApi = async () => {
         const controller = new AbortController();
-        const timeoutId = window.setTimeout(() => controller.abort(), 25000);
+        const timeoutId = window.setTimeout(() => controller.abort(), 35000);
         try {
           const res = await apiFetch('/api/itinerary', {
             method: 'POST',
@@ -839,11 +844,12 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
       }
 
       if (!res.ok || !parsed?.itinerary) {
-        throw new Error(parsed?.error || 'Could not generate 3-day itinerary.');
+        throw new Error(parsed?.error || 'Could not generate trip itinerary.');
       }
 
       const normLang = String(currentLang || 'en').trim().toLowerCase();
-      itineraryCacheRef.current = { [normLang]: parsed.itinerary };
+      const scopeKey = `${normLang}:${parsed.itinerary.days?.length || targetDays}`;
+      itineraryCacheRef.current = { [scopeKey]: parsed.itinerary };
       setItinerary(parsed.itinerary);
     } catch (err: any) {
       const msg = String(err?.message || '');
@@ -2376,17 +2382,62 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
 
                 {hasVipAccess ? (
                   <>
+                    <div className="inline-flex items-center p-1 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                      <button
+                        type="button"
+                        onClick={() => setItineraryDurationDays(1)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                          itineraryDurationDays === 1
+                            ? 'bg-[#0D5EAF] text-white'
+                            : 'text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                      >
+                        {currentLang === 'ar'
+                          ? 'اليوم فقط (1 يوم)'
+                          : currentLang === 'el'
+                          ? 'Σήμερα Μόνο (1 Ημ.)'
+                          : 'Today Only (1 Day)'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setItineraryDurationDays(7)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer whitespace-nowrap ${
+                          itineraryDurationDays === 7
+                            ? 'bg-[#0D5EAF] text-white'
+                            : 'text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                      >
+                        {currentLang === 'ar'
+                          ? 'لمدة أسبوع (7 أيام)'
+                          : currentLang === 'el'
+                          ? '1 Εβδομάδα (7 Ημ.)'
+                          : '1 Week (7 Days)'}
+                      </button>
+                    </div>
+
                     <button
                       type="button"
                       disabled={isGeneratingItinerary}
-                      onClick={handleGenerateItinerary}
+                      onClick={() => void handleGenerateItinerary(itineraryDurationDays)}
                       className="px-4 py-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 whitespace-nowrap cursor-pointer transition-colors"
                     >
                       <Sparkles className="w-3.5 h-3.5 shrink-0" />
                       <span>
                         {isGeneratingItinerary
-                          ? t.matchmaker.itinerary?.generatingBtn
-                          : t.matchmaker.itinerary?.generateBtn}
+                          ? currentLang === 'ar'
+                            ? 'جاري تجهيز الخطة وأماكن الوجبات...'
+                            : t.matchmaker.itinerary?.generatingBtn
+                          : currentLang === 'ar'
+                          ? itineraryDurationDays === 1
+                            ? 'إنشاء خطة اليوم فقط (مع أماكن الوجبات)'
+                            : 'إنشاء خطة أسبوع كامل (7 أيام)'
+                          : currentLang === 'el'
+                          ? itineraryDurationDays === 1
+                            ? 'Πρόγραμμα Σήμερα (με Εστιατόρια)'
+                            : 'Πρόγραμμα Εβδομάδας (7 Ημέρες)'
+                          : itineraryDurationDays === 1
+                          ? 'Generate Today Only Plan'
+                          : 'Generate 1-Week (7-Day) Plan'}
                       </span>
                     </button>
                     <button
@@ -2507,57 +2558,133 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-                    {(itinerary.days || []).map((day) => (
-                      <div
-                        key={day.dayNumber}
-                        className="p-5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-3 text-xs"
-                      >
-                        <div className="flex items-center justify-between gap-2 border-b border-slate-200 dark:border-slate-700 pb-2.5">
-                          <span className="font-bold text-sky-700 dark:text-sky-400 tabular-nums">
-                            #{day.dayNumber}
-                          </span>
-                          <span className="font-bold text-amber-700 dark:text-amber-400 tabular-nums">
-                            {day.estimatedDailyCost}
-                          </span>
+                  <div
+                    className={`grid grid-cols-1 gap-5 ${
+                      (itinerary.days || []).length > 1 ? 'lg:grid-cols-3' : 'lg:grid-cols-1'
+                    }`}
+                  >
+                    {(itinerary.days || []).map((day) => {
+                      const regionQuery = itinerary.city || activeCityDisplayLabel || 'Greece';
+                      const makeMapLink = (spotText?: string) =>
+                        `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                          `${String(spotText || '').slice(0, 90)} ${regionQuery} Greece`
+                        )}`;
+
+                      return (
+                        <div
+                          key={day.dayNumber}
+                          className="p-5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-3.5 text-xs"
+                        >
+                          <div className="flex items-center justify-between gap-2 border-b border-slate-200 dark:border-slate-700 pb-2.5">
+                            <span className="font-bold text-sky-700 dark:text-sky-400 tabular-nums">
+                              #{day.dayNumber}
+                            </span>
+                            <span className="font-bold text-amber-700 dark:text-amber-400 tabular-nums">
+                              {day.estimatedDailyCost}
+                            </span>
+                          </div>
+                          <h4 className="font-bold text-sm text-slate-900 dark:text-white leading-snug">
+                            {day.title}
+                          </h4>
+
+                          {/* Dedicated Meal Dining Places Box for the Selected Region */}
+                          <div className="p-3.5 rounded-xl bg-white dark:bg-slate-900 border border-sky-200/80 dark:border-sky-800/60 space-y-2.5">
+                            <p className="text-[11px] font-bold text-[#0D5EAF] dark:text-sky-300 flex items-center gap-1.5">
+                              <UtensilsCrossed className="w-3.5 h-3.5 shrink-0" />
+                              <span>
+                                {currentLang === 'ar'
+                                  ? `أماكن تناول الوجبات في ${regionQuery}`
+                                  : currentLang === 'el'
+                                  ? `Επιλεγμένα Εστιατόρια σε ${regionQuery}`
+                                  : `Meal Dining Places in ${regionQuery}`}
+                              </span>
+                            </p>
+
+                            {day.breakfastSpot && (
+                              <div className="flex items-start justify-between gap-2">
+                                <p className="text-slate-700 dark:text-slate-200 leading-relaxed">
+                                  <strong className="text-slate-900 dark:text-white">
+                                    {currentLang === 'ar'
+                                      ? 'الإفطار'
+                                      : currentLang === 'el'
+                                      ? 'Πρωινό'
+                                      : 'Breakfast'}
+                                    :
+                                  </strong>{' '}
+                                  {day.breakfastSpot}
+                                </p>
+                                <a
+                                  href={makeMapLink(day.breakfastSpot)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="shrink-0 inline-flex items-center gap-1 text-[11px] font-bold text-[#0D5EAF] dark:text-sky-400 hover:underline"
+                                >
+                                  <MapPin className="w-3 h-3" />
+                                  <span>{currentLang === 'ar' ? 'خريطة' : 'Map'}</span>
+                                </a>
+                              </div>
+                            )}
+
+                            <div className="flex items-start justify-between gap-2">
+                              <p className="text-slate-700 dark:text-slate-200 leading-relaxed">
+                                <strong className="text-slate-900 dark:text-white">
+                                  {t.matchmaker.itinerary?.lunchLabel}:
+                                </strong>{' '}
+                                {day.lunchTaverna}
+                              </p>
+                              <a
+                                href={makeMapLink(day.lunchTaverna)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="shrink-0 inline-flex items-center gap-1 text-[11px] font-bold text-[#0D5EAF] dark:text-sky-400 hover:underline"
+                              >
+                                <MapPin className="w-3 h-3" />
+                                <span>{currentLang === 'ar' ? 'خريطة' : 'Map'}</span>
+                              </a>
+                            </div>
+
+                            <div className="flex items-start justify-between gap-2">
+                              <p className="text-slate-700 dark:text-slate-200 leading-relaxed">
+                                <strong className="text-slate-900 dark:text-white">
+                                  {t.matchmaker.itinerary?.dinnerStayLabel}:
+                                </strong>{' '}
+                                {day.dinnerAndStay}
+                              </p>
+                              <a
+                                href={makeMapLink(day.dinnerAndStay)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="shrink-0 inline-flex items-center gap-1 text-[11px] font-bold text-[#0D5EAF] dark:text-sky-400 hover:underline"
+                              >
+                                <MapPin className="w-3 h-3" />
+                                <span>{currentLang === 'ar' ? 'خريطة' : 'Map'}</span>
+                              </a>
+                            </div>
+                          </div>
+
+                          <div className="space-y-2 text-slate-600 dark:text-slate-300 leading-relaxed">
+                            <p>
+                              <strong className="text-slate-800 dark:text-slate-100">
+                                {t.matchmaker.itinerary?.morningLabel}:
+                              </strong>{' '}
+                              {day.morning}
+                            </p>
+                            <p>
+                              <strong className="text-slate-800 dark:text-slate-100">
+                                {t.matchmaker.itinerary?.afternoonLabel}:
+                              </strong>{' '}
+                              {day.afternoon}
+                            </p>
+                            <p>
+                              <strong className="text-slate-800 dark:text-slate-100">
+                                {t.matchmaker.itinerary?.sunsetLabel}:
+                              </strong>{' '}
+                              {day.sunsetGem}
+                            </p>
+                          </div>
                         </div>
-                        <h4 className="font-bold text-sm text-slate-900 dark:text-white leading-snug">
-                          {day.title}
-                        </h4>
-                        <div className="space-y-2 text-slate-600 dark:text-slate-300 leading-relaxed">
-                          <p>
-                            <strong className="text-slate-800 dark:text-slate-100">
-                              {t.matchmaker.itinerary?.morningLabel}:
-                            </strong>{' '}
-                            {day.morning}
-                          </p>
-                          <p>
-                            <strong className="text-slate-800 dark:text-slate-100">
-                              {t.matchmaker.itinerary?.lunchLabel}:
-                            </strong>{' '}
-                            {day.lunchTaverna}
-                          </p>
-                          <p>
-                            <strong className="text-slate-800 dark:text-slate-100">
-                              {t.matchmaker.itinerary?.afternoonLabel}:
-                            </strong>{' '}
-                            {day.afternoon}
-                          </p>
-                          <p>
-                            <strong className="text-slate-800 dark:text-slate-100">
-                              {t.matchmaker.itinerary?.sunsetLabel}:
-                            </strong>{' '}
-                            {day.sunsetGem}
-                          </p>
-                          <p>
-                            <strong className="text-slate-800 dark:text-slate-100">
-                              {t.matchmaker.itinerary?.dinnerStayLabel}:
-                            </strong>{' '}
-                            {day.dinnerAndStay}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}

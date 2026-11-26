@@ -137,6 +137,9 @@ function mapDocToUserRecord(id: string, data: Record<string, any>): FirestoreUse
     paymentNote: String(data.paymentNote || ''),
     approvedBy: String(data.approvedBy || ''),
     approvedAt: String(data.approvedAt || ''),
+    wellnessAddonActive: Boolean(data.wellnessAddonActive),
+    wellnessAddonExpiresAt: String(data.wellnessAddonExpiresAt || ''),
+    wellnessAddonRequested: Boolean(data.wellnessAddonRequested),
     termsAccepted: Boolean(data.termsAccepted),
     createdAt: toIsoString(data.createdAt),
     updatedAt: toIsoString(data.updatedAt),
@@ -151,6 +154,11 @@ export function mapRecordToAppUser(rec: FirestoreUserRecord, emailVerified: bool
     Number.isFinite(Date.parse(rec.subscriptionExpiresAt)) &&
     Date.now() > Date.parse(rec.subscriptionExpiresAt);
 
+  const wellnessExpired =
+    Boolean(rec.wellnessAddonExpiresAt) &&
+    Number.isFinite(Date.parse(rec.wellnessAddonExpiresAt)) &&
+    Date.now() > Date.parse(rec.wellnessAddonExpiresAt);
+
   const isLegacySelfApproved =
     !adminMatch &&
     (rec.approvedBy.trim().toLowerCase() === cleanEmail ||
@@ -159,6 +167,9 @@ export function mapRecordToAppUser(rec: FirestoreUserRecord, emailVerified: bool
   const effectivelyApproved =
     adminMatch ||
     (rec.approvalStatus === 'approved' && rec.isPremium && !expired && !isLegacySelfApproved);
+
+  const effectiveWellnessActive =
+    adminMatch || (Boolean(rec.wellnessAddonActive) && !wellnessExpired && !isLegacySelfApproved);
 
   const rawTrials = Number.isFinite(Number(rec.searchesRemaining)) ? Number(rec.searchesRemaining) : 2;
   const boundedTrials =
@@ -192,6 +203,9 @@ export function mapRecordToAppUser(rec: FirestoreUserRecord, emailVerified: bool
     planExpiresAt: effectivelyApproved ? rec.subscriptionExpiresAt || null : null,
     approvedBy: isLegacySelfApproved ? '' : rec.approvedBy,
     approvedAt: isLegacySelfApproved ? null : rec.approvedAt || null,
+    wellnessAddonActive: effectiveWellnessActive,
+    wellnessAddonExpiresAt: effectiveWellnessActive ? rec.wellnessAddonExpiresAt || null : null,
+    wellnessAddonRequested: Boolean(rec.wellnessAddonRequested),
   };
 }
 
@@ -336,6 +350,9 @@ export async function syncSignedInUserProfile(
           paymentNote: 'Site Administrator',
           approvedBy: cleanEmail,
           approvedAt: nowIso,
+          wellnessAddonActive: true,
+          wellnessAddonExpiresAt: '',
+          wellnessAddonRequested: false,
           termsAccepted: true,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
@@ -354,6 +371,9 @@ export async function syncSignedInUserProfile(
           paymentNote,
           approvedBy: '',
           approvedAt: '',
+          wellnessAddonActive: false,
+          wellnessAddonExpiresAt: '',
+          wellnessAddonRequested: false,
           termsAccepted: true,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
@@ -377,7 +397,7 @@ export async function syncSignedInUserProfile(
   const hasApprovalSchema = typeof rawData.approvalStatus === 'string';
 
   if (adminUser) {
-    // Ensure admin email always has full admin & approved status synced
+    // Ensure admin email always has full admin & approved status + unlimited wellness planner synced
     const adminUpdate = {
       uid: fbUser.uid,
       email: cleanEmail,
@@ -392,6 +412,9 @@ export async function syncSignedInUserProfile(
       paymentNote: String(rawData.paymentNote || 'Site Administrator').slice(0, 300),
       approvedBy: cleanEmail,
       approvedAt: String(rawData.approvedAt || nowIso).slice(0, 40),
+      wellnessAddonActive: true,
+      wellnessAddonExpiresAt: '',
+      wellnessAddonRequested: false,
       termsAccepted: true,
       updatedAt: serverTimestamp(),
     };
@@ -428,6 +451,9 @@ export async function syncSignedInUserProfile(
       paymentNote: '',
       approvedBy: '',
       approvedAt: '',
+      wellnessAddonActive: false,
+      wellnessAddonExpiresAt: '',
+      wellnessAddonRequested: false,
       termsAccepted: true,
       updatedAt: serverTimestamp(),
     };
@@ -445,13 +471,18 @@ export async function syncSignedInUserProfile(
     return mapRecordToAppUser(mapped, true);
   }
 
-  // Standard verified non-admin owner sync (only touches allowed profile fields)
+  // Standard verified non-admin owner sync (only touches allowed profile fields + backfills missing wellness fields safely)
   const ownerPatch: Record<string, any> = {
     displayName,
     photoURL,
     termsAccepted: true,
     updatedAt: serverTimestamp(),
   };
+  if (typeof rawData.wellnessAddonActive !== 'boolean') {
+    ownerPatch.wellnessAddonActive = false;
+    ownerPatch.wellnessAddonExpiresAt = '';
+    ownerPatch.wellnessAddonRequested = Boolean(rawData.wellnessAddonRequested);
+  }
   if (options?.requestedPlan) {
     ownerPatch.requestedPlan = options.requestedPlan;
   }
@@ -485,6 +516,29 @@ export async function updateOwnSubscriptionRequest(
       paymentNote: paymentNote.trim().slice(0, 300),
       updatedAt: serverTimestamp(),
     });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `users/${uid}`);
+  }
+}
+
+export async function requestOwnWellnessAddon(
+  uid: string,
+  paymentNote: string
+): Promise<void> {
+  const userRef = doc(db, 'users', uid);
+  try {
+    const snap = await getDoc(userRef);
+    const data = snap.data() || {};
+    const patch: Record<string, any> = {
+      wellnessAddonRequested: true,
+      paymentNote: paymentNote.trim().slice(0, 300),
+      updatedAt: serverTimestamp(),
+    };
+    if (typeof data.wellnessAddonActive !== 'boolean') {
+      patch.wellnessAddonActive = false;
+      patch.wellnessAddonExpiresAt = '';
+    }
+    await updateDoc(userRef, patch);
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, `users/${uid}`);
   }
@@ -626,6 +680,38 @@ export async function adminSetPendingSubscriber(uid: string): Promise<FirestoreU
     return mapDocToUserRecord(uid, freshSnap.data() || patch);
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, `users/${uid}`);
+  }
+}
+
+export async function adminToggleWellnessAddon(params: {
+  uid: string;
+  active: boolean;
+  durationDays?: number;
+  paymentNote?: string;
+}): Promise<FirestoreUserRecord> {
+  const now = new Date();
+  const safeDays = Math.max(1, Math.min(365, Number(params.durationDays) || 30));
+  const expiresAt = params.active
+    ? new Date(now.getTime() + safeDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 40)
+    : '';
+
+  const userRef = doc(db, 'users', params.uid);
+  const patch: Record<string, any> = {
+    wellnessAddonActive: Boolean(params.active),
+    wellnessAddonExpiresAt: expiresAt,
+    wellnessAddonRequested: false,
+    updatedAt: serverTimestamp(),
+  };
+  if (typeof params.paymentNote === 'string' && params.paymentNote.trim()) {
+    patch.paymentNote = params.paymentNote.trim().slice(0, 300);
+  }
+
+  try {
+    await updateDoc(userRef, patch);
+    const freshSnap = await getDoc(userRef);
+    return mapDocToUserRecord(params.uid, freshSnap.data() || patch);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `users/${params.uid}`);
   }
 }
 

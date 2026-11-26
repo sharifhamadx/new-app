@@ -11,6 +11,7 @@ import {
   adminListSubscribers,
   adminRejectSubscriber,
   adminSetPendingSubscriber,
+  adminToggleWellnessAddon,
   isAdminEmail,
 } from '../firebase';
 import {
@@ -27,6 +28,7 @@ import {
   Calendar,
   Mail,
   RotateCcw,
+  HeartPulse,
 } from 'lucide-react';
 
 interface SubscriberControlCenterProps {
@@ -197,6 +199,26 @@ export const SubscriberControlCenter: React.FC<SubscriberControlCenterProps> = (
       });
     } catch (err: any) {
       setErrorMsg(err?.message || (isAr ? 'تعذر تحديث الحالة.' : 'Failed to update status.'));
+    } finally {
+      setBusyUid(null);
+    }
+  };
+
+  const handleToggleWellness = async (sub: FirestoreUserRecord) => {
+    const currentlyActive = Boolean(sub.wellnessAddonActive);
+    const note = (noteDrafts[sub.uid] ?? sub.paymentNote ?? '').trim();
+    setBusyUid(sub.uid);
+    setErrorMsg(null);
+    try {
+      const updated = await adminToggleWellnessAddon({
+        uid: sub.uid,
+        active: !currentlyActive,
+        durationDays: 30,
+        paymentNote: note || (!currentlyActive ? (isAr ? 'تفعيل خطة الصحة €3/شهر' : 'Wellness Add-On €3/mo activated') : undefined),
+      });
+      setSubscribers((prev) => prev.map((item) => (item.uid === sub.uid ? updated : item)));
+    } catch (err: any) {
+      setErrorMsg(err?.message || (isAr ? 'تعذر تحديث ميزة الصحة والوزن.' : 'Failed to update wellness add-on.'));
     } finally {
       setBusyUid(null);
     }
@@ -384,6 +406,18 @@ export const SubscriberControlCenter: React.FC<SubscriberControlCenterProps> = (
 
                   {/* Explicit Status Indicator */}
                   <div className="flex flex-wrap items-center gap-2">
+                    {sub.wellnessAddonActive ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-sky-50 dark:bg-sky-950/50 border border-sky-200 dark:border-sky-800 text-[#0D5EAF] dark:text-sky-300 text-xs font-bold">
+                        <HeartPulse className="w-3.5 h-3.5" />
+                        <span>{isAr ? 'خطة الصحة €3 مفعّلة' : 'Wellness €3 Active'}</span>
+                      </span>
+                    ) : sub.wellnessAddonRequested ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-50 dark:bg-amber-950/50 border border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-300 text-xs font-bold">
+                        <HeartPulse className="w-3.5 h-3.5" />
+                        <span>{isAr ? 'طلب خطة الصحة +€3' : 'Wellness €3 Requested'}</span>
+                      </span>
+                    ) : null}
+
                     {sub.approvalStatus === 'approved' ? (
                       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 text-xs font-bold">
                         <CheckCircle2 className="w-3.5 h-3.5" />
@@ -426,6 +460,14 @@ export const SubscriberControlCenter: React.FC<SubscriberControlCenterProps> = (
                       {isAr ? 'ينتهي في:' : 'Expires:'}{' '}
                       <strong className="text-emerald-700 dark:text-emerald-400">
                         {formatDate(sub.subscriptionExpiresAt)}
+                      </strong>
+                    </span>
+                  )}
+                  {sub.wellnessAddonActive && sub.wellnessAddonExpiresAt && (
+                    <span>
+                      {isAr ? 'انتهاء الخطة الصحية:' : 'Wellness Exp:'}{' '}
+                      <strong className="text-[#0D5EAF] dark:text-sky-300">
+                        {formatDate(sub.wellnessAddonExpiresAt)}
                       </strong>
                     </span>
                   )}
@@ -483,6 +525,28 @@ export const SubscriberControlCenter: React.FC<SubscriberControlCenterProps> = (
                         <span>{isAr ? 'إيقاف / رفض' : 'Suspend'}</span>
                       </button>
                     )}
+
+                      <button
+                        type="button"
+                        disabled={isBusy}
+                        onClick={() => void handleToggleWellness(sub)}
+                        className={`px-3 py-2 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap border transition-colors ${
+                          sub.wellnessAddonActive
+                            ? 'bg-sky-50 dark:bg-sky-950/50 border-sky-300 dark:border-sky-700 text-[#0D5EAF] dark:text-sky-300 hover:bg-sky-100'
+                            : 'bg-[#0D5EAF] hover:bg-[#0A4A8B] border-[#0D5EAF] text-white'
+                        }`}
+                      >
+                        <HeartPulse className="w-3.5 h-3.5" />
+                        <span>
+                          {sub.wellnessAddonActive
+                            ? isAr
+                              ? 'إيقاف خطة الصحة €3'
+                              : 'Revoke Wellness €3'
+                            : isAr
+                            ? 'تفعيل خطة الصحة +€3/شهر'
+                            : 'Activate Wellness +€3/mo'}
+                        </span>
+                      </button>
 
                     {sub.approvalStatus !== 'pending' && (
                       <button

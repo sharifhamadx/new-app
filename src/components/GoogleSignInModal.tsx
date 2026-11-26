@@ -146,10 +146,18 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
       finalizeSignedInUser(synced);
     } catch (err: any) {
       const code = String(err?.code || '');
+      const msgStr = String(err?.message || '');
       if (code === 'auth/popup-closed-by-user') {
         setErrorMsg(t.auth.popupClosedError);
       } else if (code === 'auth/popup-blocked') {
         setErrorMsg(t.auth.popupBlockedError);
+      } else if (code === 'auth/unauthorized-domain' || /unauthorized-domain/i.test(msgStr)) {
+        const host = typeof window !== 'undefined' ? window.location.hostname : '';
+        setErrorMsg(
+          isAr
+            ? `النطاق (${host}) غير مضاف بعد في النطاقات المصرح بها (Authorized domains) داخل Firebase Console لمشروع gen-lang-client-0788378547. أضف "${host}" في Authentication → Settings → Authorized domains ثم أعد المحاولة، أو سجّل الدخول بالبريد الإلكتروني وكلمة المرور أدناه.`
+            : `Domain "${host}" is not yet in Firebase Console Authorized domains (Authentication → Settings → Authorized domains). Add "${host}" and retry, or sign in with Email & Password below.`
+        );
       } else {
         setErrorMsg(err?.message || t.auth.signInGenericError);
       }
@@ -195,11 +203,19 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
       }
     } catch (err: any) {
       const code = String(err?.code || '');
+      const msgStr = String(err?.message || '');
       if (code === 'auth/operation-not-allowed') {
         setErrorMsg(
           isAr
             ? 'تسجيل الدخول بالبريد وكلمة المرور غير مفعّل بعد في Firebase Console (Authentication → Sign-in method → Email/Password).'
             : 'Email/Password sign-in is not yet enabled in Firebase Console (Authentication → Sign-in method → Email/Password).'
+        );
+      } else if (code === 'auth/unauthorized-domain' || /unauthorized-domain/i.test(msgStr)) {
+        const host = typeof window !== 'undefined' ? window.location.hostname : '';
+        setErrorMsg(
+          isAr
+            ? `يرجى إضافة النطاق "${host}" إلى Authorized domains في Firebase Console (Authentication → Settings → Authorized domains).`
+            : `Please add "${host}" to Authorized domains in Firebase Console (Authentication → Settings → Authorized domains).`
         );
       } else if (code === 'auth/email-already-in-use') {
         setErrorMsg(

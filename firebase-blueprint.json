@@ -57,6 +57,16 @@
           "type": "string",
           "maxLength": 40
         },
+        "wellnessAddonActive": {
+          "type": "boolean"
+        },
+        "wellnessAddonExpiresAt": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "wellnessAddonRequested": {
+          "type": "boolean"
+        },
         "termsAccepted": {
           "type": "boolean"
         },
@@ -83,6 +93,9 @@
         "paymentNote",
         "approvedBy",
         "approvedAt",
+        "wellnessAddonActive",
+        "wellnessAddonExpiresAt",
+        "wellnessAddonRequested",
         "termsAccepted",
         "createdAt",
         "updatedAt"

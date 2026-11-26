@@ -4,6 +4,7 @@ import { useUiTranslation } from '../hooks/useTranslatedContent';
 import { apiUrl } from '../utils/apiBase';
 import {
   reloadCurrentFirebaseUser,
+  requestOwnWellnessAddon,
   syncSignedInUserProfile,
   updateOwnSubscriptionRequest,
 } from '../firebase';
@@ -19,6 +20,7 @@ import {
   RefreshCw,
   ArrowLeft,
   ArrowRight,
+  HeartPulse,
 } from 'lucide-react';
 
 interface PremiumModalProps {
@@ -72,6 +74,26 @@ export const PremiumModal: React.FC<PremiumModalProps> = ({
       }
     }
     window.open(whatsappSubscribeUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleWellnessAddonWhatsapp = async () => {
+    setErrorMsg(null);
+    if (user && !user.isGuest && user.emailVerified !== false) {
+      try {
+        await requestOwnWellnessAddon(
+          user.uid,
+          paymentNote.trim() || 'Wellness Planner +€3/mo WhatsApp receipt'
+        );
+      } catch {
+        // non-fatal
+      }
+    }
+    const url = apiUrl(
+      `/api/subscribe-whatsapp?plan=wellness_addon&lang=${encodeURIComponent(currentLang)}${
+        user?.email ? `&email=${encodeURIComponent(user.email)}` : ''
+      }`
+    );
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   const handleRefreshActivation = async () => {
@@ -288,6 +310,33 @@ export const PremiumModal: React.FC<PremiumModalProps> = ({
             >
               {refreshing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
               <span>{isAr ? 'تحديث حالة التفعيل' : 'Refresh Status'}</span>
+            </button>
+          </div>
+
+          {/* Optional +€3/month Health & Weight Trip Planner Add-On */}
+          <div className="p-4 rounded-xl bg-sky-50/70 dark:bg-[#061325] border border-[#0D5EAF]/25 dark:border-[#163256] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="space-y-1">
+              <div className="flex items-center gap-1.5 text-xs font-bold text-[#0D5EAF] dark:text-sky-300">
+                <HeartPulse className="w-4 h-4" />
+                <span>
+                  {isAr
+                    ? 'إضافة تخطيط الرحلات الصحية والوزن + تصدير PDF بشعار التطبيق (€3/شهر)'
+                    : 'Health & Weight Trip Planner + Branded PDF Add-On (€3/mo)'}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-600 dark:text-slate-300">
+                {isAr
+                  ? 'جدول بالأماكن والطعام والسعرات ونسبة فقدان/زيادة الوزن مع حفظ PDF بالهاتف.'
+                  : 'Web-grounded Greek meal & calorie tables, weight % projections & mobile PDF.'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void handleWellnessAddonWhatsapp()}
+              className="px-4 py-2.5 rounded-xl bg-[#0D5EAF] hover:bg-[#0A4A8B] text-white text-xs font-bold whitespace-nowrap shrink-0 inline-flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <MessageCircle className="w-3.5 h-3.5" />
+              <span>{isAr ? 'تفعيل الإضافة (€3/شهر)' : 'Add Wellness (€3/mo)'}</span>
             </button>
           </div>
 

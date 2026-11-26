@@ -291,12 +291,22 @@ export async function generateExecutivePdf({
   drawTextLines(summaryLines, isRtl ? PAGE_W - MARGIN_X - 32 : MARGIN_X + 32, y + 46, 36, '#1E293B', `400 24px ${SANS_FONT}`);
   y += summaryBoxH + 34;
 
-  // VIP 3-Day Business & Leisure Itinerary Section
+  // VIP Travel & Dining Itinerary Section
   if (itinerary && Array.isArray(itinerary.days) && itinerary.days.length > 0) {
-    drawSectionHeading(t?.matchmaker?.itinerary?.sectionTitle || '3-Day VIP Travel Itinerary');
+    const scopeLabel =
+      itinerary.days.length === 1
+        ? isRtl
+          ? 'خطة الرحلة لليوم فقط وأماكن الوجبات'
+          : '1-Day VIP Travel & Dining Plan'
+        : itinerary.days.length === 7
+        ? isRtl
+          ? 'خطة الرحلة لمدة أسبوع (7 أيام) وأماكن الوجبات'
+          : '1-Week (7-Day) VIP Travel & Dining Plan'
+        : t?.matchmaker?.itinerary?.sectionTitle || 'VIP Travel Itinerary';
+    drawSectionHeading(scopeLabel);
 
     // Budget Overview Bar
-    const budgetText = `${t?.matchmaker?.itinerary?.totalBudgetLabel || '3-Day Budget Estimate'}: ${itinerary.budgetSummary}`;
+    const budgetText = `${t?.matchmaker?.itinerary?.totalBudgetLabel || 'Budget Estimate'}: ${itinerary.budgetSummary}`;
     ctx.font = `700 22px ${SANS_FONT}`;
     const budgetLines = wrapTextLines(ctx, budgetText, CONTENT_W - 56);
     const budgetH = budgetLines.length * 32 + 34;
@@ -307,6 +317,9 @@ export async function generateExecutivePdf({
 
     for (const day of itinerary.days) {
       const entries = [
+        ...(day.breakfastSpot
+          ? [{ label: isRtl ? 'مكان وجبة الإفطار' : 'Breakfast Dining Spot', val: day.breakfastSpot }]
+          : []),
         { label: t?.matchmaker?.itinerary?.morningLabel || 'Morning', val: day.morning },
         { label: t?.matchmaker?.itinerary?.lunchLabel || 'Lunch Taverna', val: day.lunchTaverna },
         { label: t?.matchmaker?.itinerary?.afternoonLabel || 'Afternoon', val: day.afternoon },

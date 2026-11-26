@@ -1032,6 +1032,9 @@ async function fetchFirestoreUserApproval(
   isPremium: boolean;
   subscriptionPlan: string;
   subscriptionExpiresAt: string;
+  wellnessAddonActive: boolean;
+  wellnessAddonExpiresAt: string;
+  wellnessAddonRequested: boolean;
   searchesRemaining?: number;
 } | null> {
   if (!firebaseProjectId || !uid || !idToken) return null;
@@ -1054,6 +1057,9 @@ async function fetchFirestoreUserApproval(
     const subscriptionExpiresAt = String(fields.subscriptionExpiresAt?.stringValue || '');
     const approvedBy = String(fields.approvedBy?.stringValue || '').trim().toLowerCase();
     const paymentNote = String(fields.paymentNote?.stringValue || '').trim();
+    const wellnessAddonActiveRaw = Boolean(fields.wellnessAddonActive?.booleanValue);
+    const wellnessAddonExpiresAt = String(fields.wellnessAddonExpiresAt?.stringValue || '');
+    const wellnessAddonRequested = Boolean(fields.wellnessAddonRequested?.booleanValue);
     const searchesRemainingRaw =
       fields.searchesRemaining?.integerValue !== undefined
         ? Number(fields.searchesRemaining.integerValue)
@@ -1069,6 +1075,11 @@ async function fetchFirestoreUserApproval(
       Number.isFinite(Date.parse(subscriptionExpiresAt)) &&
       Date.now() > Date.parse(subscriptionExpiresAt);
 
+    const wellnessExpired =
+      Boolean(wellnessAddonExpiresAt) &&
+      Number.isFinite(Date.parse(wellnessAddonExpiresAt)) &&
+      Date.now() > Date.parse(wellnessAddonExpiresAt);
+
     const approvalStatus =
       expired || isLegacySelfApproved
         ? 'pending'
@@ -1081,6 +1092,9 @@ async function fetchFirestoreUserApproval(
       isPremium: expired || isLegacySelfApproved ? false : isPremium,
       subscriptionPlan: expired || isLegacySelfApproved ? 'free' : subscriptionPlan,
       subscriptionExpiresAt: isLegacySelfApproved ? '' : subscriptionExpiresAt,
+      wellnessAddonActive: !isLegacySelfApproved && wellnessAddonActiveRaw && !wellnessExpired,
+      wellnessAddonExpiresAt: isLegacySelfApproved ? '' : wellnessAddonExpiresAt,
+      wellnessAddonRequested: !isLegacySelfApproved && wellnessAddonRequested,
       searchesRemaining: isLegacySelfApproved ? 2 : searchesRemainingRaw,
     };
   } catch (err) {
@@ -1591,7 +1605,7 @@ function mintGuestSession(existingTrialId?: string, termsAccepted = false): Sess
   };
 }
 
-type PaidFeatureKind = 'recommend' | 'translator' | 'tts' | 'itinerary';
+type PaidFeatureKind = 'recommend' | 'translator' | 'tts' | 'itinerary' | 'wellness';
 
 interface PaidAccessCheck {
   allowed: boolean;
@@ -1600,7 +1614,8 @@ interface PaidAccessCheck {
   approvalRequired?: boolean;
   trialExhausted?: boolean;
   subscriptionRequired?: boolean;
-  approvalStatus?: 'pending' | 'rejected' | 'unregistered';
+  wellnessAddonRequired?: boolean;
+  approvalStatus?: 'pending' | 'approved' | 'rejected' | 'unregistered';
   isAdmin?: boolean;
   isPremium?: boolean;
   isTrial?: boolean;
@@ -1654,16 +1669,6 @@ async function resolvePaidFeatureAccess(
       };
     }
     const statusDoc = await fetchFirestoreUserApproval(fb.uid, bearerToken, fb.email);
-    if (statusDoc && statusDoc.approvalStatus === 'approved' && statusDoc.isPremium) {
-      return {
-        allowed: true,
-        isAdmin: false,
-        isPremium: true,
-        uid: fb.uid,
-        trialId: fb.uid,
-        email: fb.email,
-      };
-    }
     if (statusDoc?.approvalStatus === 'rejected') {
       return {
         allowed: false,
@@ -1671,6 +1676,43 @@ async function resolvePaidFeatureAccess(
         error: 'Your account access is currently suspended. Please contact AEGEA Admin via WhatsApp.',
         approvalRequired: true,
         approvalStatus: 'rejected',
+        uid: fb.uid,
+        trialId: fb.uid,
+        email: fb.email,
+      };
+    }
+
+    // Wellness & Weight Goal Trip Planner + Branded PDF Add-On (+€3/month for subscribers, Free & Unlimited for Admin)
+    if (feature === 'wellness') {
+      if (statusDoc?.wellnessAddonActive) {
+        return {
+          allowed: true,
+          isAdmin: false,
+          isPremium: Boolean(statusDoc.isPremium),
+          uid: fb.uid,
+          trialId: fb.uid,
+          email: fb.email,
+        };
+      }
+      return {
+        allowed: false,
+        status: 403,
+        error:
+          'The Health & Weight-Goal Trip Planner + Branded PDF add-on requires €3/month activation. Send your receipt via WhatsApp for Admin approval.',
+        approvalRequired: true,
+        wellnessAddonRequired: true,
+        approvalStatus: statusDoc?.approvalStatus || 'pending',
+        uid: fb.uid,
+        trialId: fb.uid,
+        email: fb.email,
+      };
+    }
+
+    if (statusDoc && statusDoc.approvalStatus === 'approved' && statusDoc.isPremium) {
+      return {
+        allowed: true,
+        isAdmin: false,
+        isPremium: true,
         uid: fb.uid,
         trialId: fb.uid,
         email: fb.email,
@@ -1817,6 +1859,11 @@ app.get('/api/subscribe-whatsapp', (req: Request, res: Response) => {
         en: 'Annual VIP Subscription (€50/yr)',
         ar: 'اشتراك VIP السنوي (€50 سنوياً)',
         el: 'Ετήσια Συνδρομή VIP (50€)',
+      },
+      wellness_addon: {
+        en: 'Health & Weight Trip Planner + Branded PDF Add-On (€3/mo)',
+        ar: 'إضافة تخطيط الرحلة الصحية والوزن + ملف PDF بشعار التطبيق (€3 شهرياً)',
+        el: 'Πρόσθετο Πλάνου Υγείας & Βάρους + PDF (3€/μήνα)',
       },
     };
     const chosen = planNames[plan] || planNames.monthly;
@@ -3192,32 +3239,90 @@ function buildDeterministicItinerary(params: {
   foodType: string;
   langCode: string;
   guideResult: any;
+  durationDays?: number;
+  liveDining?: LiveOsmVenue[];
 }) {
-  const { city, foodType, langCode, guideResult } = params;
+  const { city, foodType, langCode, guideResult, durationDays = 3, liveDining = [] } = params;
+  const safeDays = Math.max(1, Math.min(14, Math.round(Number(durationDays) || 3)));
+  const isAr = String(langCode || '').toLowerCase().startsWith('ar') || String(langCode || '').toLowerCase() === 'arabic';
+  const isEl = String(langCode || '').toLowerCase().startsWith('el') || String(langCode || '').toLowerCase() === 'greek';
   const txt = localizedFallbackStrings(langCode, city, foodType, new Date().toLocaleDateString('en-US'));
-  const t = guideResult?.tavernas || [];
-  const h = guideResult?.hotels || [];
-  const s = guideResult?.archaeologicalSites || [];
-  const g = guideResult?.hiddenGems || [];
-  const d = guideResult?.dishes || [];
+  const t = Array.isArray(guideResult?.tavernas) ? guideResult.tavernas : [];
+  const h = Array.isArray(guideResult?.hotels) ? guideResult.hotels : [];
+  const s = Array.isArray(guideResult?.archaeologicalSites) ? guideResult.archaeologicalSites : [];
+  const g = Array.isArray(guideResult?.hiddenGems) ? guideResult.hiddenGems : [];
+  const d = Array.isArray(guideResult?.dishes) ? guideResult.dishes : [];
+
+  // Pool real named dining venues specifically in the selected Greek region
+  const diningPool: string[] = [
+    ...t.map((x: any) => (x?.name ? `${x.name}${x.location ? ` (${x.location})` : ''}` : '')),
+    ...liveDining.map((v) => `${v.name}${v.location ? ` (${v.location})` : ''}`),
+  ].filter(Boolean);
+  const pickDining = (index: number, fallbackLabel: string) =>
+    diningPool.length > 0 ? diningPool[index % diningPool.length] : fallbackLabel;
+
+  const days = Array.from({ length: safeDays }, (_, idx) => {
+    const breakfastVenue = pickDining(
+      idx * 3,
+      isAr ? `مخبز ومقهى محلي في ${city}` : isEl ? `Τοπικός φούρνος & καφέ (${city})` : `Local Artisan Bakery & Café in ${city}`
+    );
+    const lunchVenue = pickDining(
+      idx * 3 + 1,
+      isAr ? `تافيرنا تقليدية في ${city}` : isEl ? `Παραδοσιακή ταβέρνα (${city})` : `Authentic Taverna in ${city}`
+    );
+    const dinnerVenue = pickDining(
+      idx * 3 + 2,
+      isAr ? `مطعم عائلي في ${city}` : isEl ? `Οικογενειακή ταβέρνα (${city})` : `Traditional Dinner Taverna in ${city}`
+    );
+    const dishHint = d[idx % Math.max(d.length, 1)]?.name || foodType;
+    const hotelName = h[idx % Math.max(h.length, 1)]?.name || (isAr ? `فندق مركزي في ${city}` : `${city} Central Boutique Stay`);
+    const siteItem = s[idx % Math.max(s.length, 1)];
+    const gemItem = g[idx % Math.max(g.length, 1)];
+
+    return {
+      dayNumber: idx + 1,
+      title:
+        txt.dayTitles[idx] ||
+        (isAr
+          ? `اليوم ${idx + 1} — استكشاف ${city}`
+          : isEl
+          ? `Ημέρα ${idx + 1} — ${city}`
+          : `${city} — Day ${idx + 1}`),
+      breakfastSpot: breakfastVenue,
+      morning: siteItem?.name
+        ? `${siteItem.name} (${siteItem.bestTimeToVisit || txt.morningLabel}) — ${siteItem.description}`
+        : isAr
+        ? `جولة صباحية سيراً على الأقدام في أحياء ${city} التاريخية`
+        : `Morning walk through historic ${city}`,
+      lunchTaverna: `${lunchVenue} — ${dishHint}`,
+      afternoon: isAr
+        ? `التجول في الأسواق المحلية والمناطق الساحلية في ${city} مع استراحة قهوة يونانية`
+        : `${city} historic bazaar, coastal walk & Greek coffee break`,
+      sunsetGem: gemItem?.title || (isAr ? `إطلالة الغروب الساحرة في ${city}` : `${city} Coastal & Historic Overlook`),
+      dinnerAndStay: `${dinnerVenue} · ${hotelName}`,
+      estimatedDailyCost: idx % 3 === 0 ? '€140 – €220' : idx % 3 === 1 ? '€130 – €210' : '€120 – €190',
+    };
+  });
+
+  const planScopeLabel =
+    safeDays === 1
+      ? isAr
+        ? 'خطة اليوم فقط'
+        : isEl
+        ? 'Πρόγραμμα 1 Ημέρας'
+        : 'Today-Only Plan'
+      : safeDays === 7
+      ? isAr
+        ? 'خطة أسبوع كامل (7 أيام)'
+        : isEl
+        ? 'Εβδομαδιαίο Πρόγραμμα (7 Ημέρες)'
+        : '7-Day Weekly Plan'
+      : `${safeDays} ${isAr ? 'أيام' : 'Days'}`;
 
   return {
     city,
-    headline: `${city} · ${foodType}`,
-    days: [0, 1, 2].map((idx) => ({
-      dayNumber: idx + 1,
-      title: txt.dayTitles[idx] || `${city} — Day ${idx + 1}`,
-      morning: s[idx]?.name
-        ? `${s[idx].name} (${s[idx].bestTimeToVisit || txt.morningLabel}) — ${s[idx].description}`
-        : `Morning walk through historic ${city}`,
-      lunchTaverna: t[idx]?.name
-        ? `${t[idx].name} — ${d[idx]?.name || foodType}`
-        : `Traditional lunch featuring ${foodType}`,
-      afternoon: `${city} historic bazaar, local artisan quarter & Greek coffee break`,
-      sunsetGem: g[idx % Math.max(g.length, 1)]?.title || `${city} Coastal & Historic Overlook`,
-      dinnerAndStay: `${t[(idx + 1) % Math.max(t.length, 1)]?.name || city} · ${h[idx % Math.max(h.length, 1)]?.name || `${city} Central Hotel`}`,
-      estimatedDailyCost: idx === 0 ? '€140 – €220' : idx === 1 ? '€130 – €210' : '€120 – €190',
-    })),
+    headline: `${city} · ${planScopeLabel} · ${foodType}`,
+    days,
     budgetSummary: txt.budgetSummary,
   };
 }
@@ -3441,6 +3546,7 @@ const ITINERARY_RESPONSE_SCHEMA = {
         properties: {
           dayNumber: { type: Type.INTEGER },
           title: { type: Type.STRING },
+          breakfastSpot: { type: Type.STRING },
           morning: { type: Type.STRING },
           lunchTaverna: { type: Type.STRING },
           afternoon: { type: Type.STRING },
@@ -3451,6 +3557,7 @@ const ITINERARY_RESPONSE_SCHEMA = {
         required: [
           'dayNumber',
           'title',
+          'breakfastSpot',
           'morning',
           'lunchTaverna',
           'afternoon',
@@ -3464,6 +3571,343 @@ const ITINERARY_RESPONSE_SCHEMA = {
   },
   required: ['city', 'headline', 'days', 'budgetSummary'],
 };
+
+const WELLNESS_PLAN_RESPONSE_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    headline: { type: Type.STRING },
+    destination: { type: Type.STRING },
+    goalType: { type: Type.STRING },
+    durationDays: { type: Type.INTEGER },
+    summary: { type: Type.STRING },
+    recommendedDailyCalories: { type: Type.INTEGER },
+    estimatedDailyBurnCalories: { type: Type.INTEGER },
+    dailyNetCalorieDelta: { type: Type.INTEGER },
+    expectedTripWeightChangeKg: { type: Type.NUMBER },
+    expectedTripWeightChangePercent: { type: Type.NUMBER },
+    projectedMonthlyChangeKg: { type: Type.NUMBER },
+    projectedMonthlyChangePercent: { type: Type.NUMBER },
+    weightProjectionLabel: { type: Type.STRING },
+    macroSplitSummary: { type: Type.STRING },
+    healthAdaptationSummary: { type: Type.STRING },
+    medicalSafetyNote: { type: Type.STRING },
+    days: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          dayNumber: { type: Type.INTEGER },
+          dayTitle: { type: Type.STRING },
+          morningPlaceAndActivity: { type: Type.STRING },
+          afternoonPlaceAndActivity: { type: Type.STRING },
+          eveningPlaceAndActivity: { type: Type.STRING },
+          estimatedActiveBurnKcal: { type: Type.INTEGER },
+          totalDailyCalories: { type: Type.INTEGER },
+          hydrationLiters: { type: Type.NUMBER },
+          dailyStepGoal: { type: Type.INTEGER },
+          dailyWeightTrendNote: { type: Type.STRING },
+          meals: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                mealType: { type: Type.STRING },
+                venueOrSetting: { type: Type.STRING },
+                dishName: { type: Type.STRING },
+                greekDishName: { type: Type.STRING },
+                foodCategory: { type: Type.STRING },
+                portionGuide: { type: Type.STRING },
+                calories: { type: Type.INTEGER },
+                proteinGrams: { type: Type.INTEGER },
+                carbsGrams: { type: Type.INTEGER },
+                fatGrams: { type: Type.INTEGER },
+                healthBenefitNote: { type: Type.STRING },
+              },
+              required: [
+                'mealType',
+                'venueOrSetting',
+                'dishName',
+                'greekDishName',
+                'foodCategory',
+                'portionGuide',
+                'calories',
+                'proteinGrams',
+                'carbsGrams',
+                'fatGrams',
+                'healthBenefitNote',
+              ],
+            },
+          },
+        },
+        required: [
+          'dayNumber',
+          'dayTitle',
+          'morningPlaceAndActivity',
+          'afternoonPlaceAndActivity',
+          'eveningPlaceAndActivity',
+          'estimatedActiveBurnKcal',
+          'totalDailyCalories',
+          'hydrationLiters',
+          'dailyStepGoal',
+          'dailyWeightTrendNote',
+          'meals',
+        ],
+      },
+    },
+  },
+  required: [
+    'headline',
+    'destination',
+    'goalType',
+    'durationDays',
+    'summary',
+    'recommendedDailyCalories',
+    'estimatedDailyBurnCalories',
+    'dailyNetCalorieDelta',
+    'expectedTripWeightChangeKg',
+    'expectedTripWeightChangePercent',
+    'projectedMonthlyChangeKg',
+    'projectedMonthlyChangePercent',
+    'weightProjectionLabel',
+    'macroSplitSummary',
+    'healthAdaptationSummary',
+    'medicalSafetyNote',
+    'days',
+  ],
+};
+
+function computeWellnessBaselines(params: {
+  goalType: 'weight_loss' | 'weight_gain' | 'health_maintenance';
+  durationDays: number;
+  currentWeightKg: number;
+  dailyCalorieTarget?: number;
+  activityLevel: 'light' | 'moderate' | 'active';
+}) {
+  const safeWeight = Math.max(35, Math.min(240, Number(params.currentWeightKg) || 75));
+  const safeDays = Math.max(1, Math.min(14, Math.round(Number(params.durationDays) || 5)));
+  const activityMult =
+    params.activityLevel === 'active' ? 1.65 : params.activityLevel === 'moderate' ? 1.48 : 1.32;
+  const activeBurn =
+    params.activityLevel === 'active' ? 520 : params.activityLevel === 'moderate' ? 380 : 240;
+  const maintenanceTdee = Math.round(safeWeight * 22 * activityMult);
+
+  let defaultIntake = maintenanceTdee;
+  if (params.goalType === 'weight_loss') {
+    defaultIntake = Math.max(1350, maintenanceTdee - 550);
+  } else if (params.goalType === 'weight_gain') {
+    defaultIntake = maintenanceTdee + 480;
+  }
+
+  const intake =
+    params.dailyCalorieTarget && Number.isFinite(params.dailyCalorieTarget) && params.dailyCalorieTarget >= 1100
+      ? Math.min(4500, Math.round(params.dailyCalorieTarget))
+      : defaultIntake;
+
+  const netDelta = intake - maintenanceTdee;
+  const tripKg = Number(((netDelta * safeDays) / 7700).toFixed(2));
+  const tripPct = Number(((tripKg / safeWeight) * 100).toFixed(2));
+  const monthKg = Number(((netDelta * 30) / 7700).toFixed(2));
+  const monthPct = Number(((monthKg / safeWeight) * 100).toFixed(2));
+
+  return {
+    safeWeight,
+    safeDays,
+    maintenanceTdee,
+    intake,
+    activeBurn,
+    netDelta,
+    tripKg,
+    tripPct,
+    monthKg,
+    monthPct,
+  };
+}
+
+function buildDeterministicWellnessPlan(params: {
+  destination: string;
+  goalType: 'weight_loss' | 'weight_gain' | 'health_maintenance';
+  durationDays: number;
+  currentWeightKg: number;
+  dailyCalorieTarget?: number;
+  activityLevel: 'light' | 'moderate' | 'active';
+  langCode: string;
+  conditions: string[];
+  liveDining?: LiveOsmVenue[];
+  liveSites?: LiveOsmVenue[];
+}) {
+  const isAr = params.langCode.toLowerCase().startsWith('ar');
+  const isEl = params.langCode.toLowerCase().startsWith('el');
+  const calc = computeWellnessBaselines(params);
+  const diningVenues = Array.isArray(params.liveDining) ? params.liveDining : [];
+  const siteVenues = Array.isArray(params.liveSites) ? params.liveSites : [];
+
+  const pickDiningPlace = (idx: number, defaultStr: string) => {
+    if (diningVenues.length === 0) return defaultStr;
+    const v = diningVenues[idx % diningVenues.length];
+    return v.location ? `${v.name} — ${v.location}` : `${v.name} (${params.destination})`;
+  };
+  const pickSiteName = (idx: number, defaultStr: string) => {
+    if (siteVenues.length === 0) return defaultStr;
+    const v = siteVenues[idx % siteVenues.length];
+    return v.location ? `${v.name} (${v.location})` : v.name;
+  };
+
+  const bKcal = Math.round(calc.intake * 0.25);
+  const lKcal = Math.round(calc.intake * 0.35);
+  const sKcal = Math.round(calc.intake * 0.13);
+  const dKcal = calc.intake - bKcal - lKcal - sKcal;
+
+  const days = Array.from({ length: calc.safeDays }, (_, idx) => {
+    const dayNum = idx + 1;
+    const morningSpot = pickSiteName(
+      idx,
+      isAr ? `الأحياء التاريخية والواجهة البحرية في ${params.destination}` : `${params.destination} Historic Center & Promenade`
+    );
+    const afternoonSpot = pickSiteName(
+      idx + 1,
+      isAr ? `المعالم التراثية والأسواق المحلية في ${params.destination}` : `${params.destination} Landmarks & Local Agora`
+    );
+
+    return {
+      dayNumber: dayNum,
+      dayTitle: isAr
+        ? `اليوم ${dayNum} · برنامج ${params.destination} الصحي`
+        : isEl
+        ? `Ημέρα ${dayNum} · Πρόγραμμα ${params.destination}`
+        : `Day ${dayNum} · ${params.destination} Wellness Route`,
+      morningPlaceAndActivity: isAr
+        ? `جولة مشي صباحية حول ${morningSpot} (45 دقيقة)`
+        : isEl
+        ? `Πρωινός περίπατος: ${morningSpot} (45 λεπτά)`
+        : `Morning brisk walk at ${morningSpot} (45 min)`,
+      afternoonPlaceAndActivity: isAr
+        ? `استكشاف ${afternoonSpot} مع فترات راحة وترطيب منتظمة`
+        : isEl
+        ? `Επίσκεψη σε ${afternoonSpot}`
+        : `Cultural landmark route around ${afternoonSpot} with hydration breaks`,
+      eveningPlaceAndActivity: isAr
+        ? `نزهة مسائية هادئة عند الغروب في ${params.destination} لتعزيز الهضم وجودة النوم`
+        : isEl
+        ? `Χαλαρός απογευματινός περίπατος ηλιοβασιλέματος (${params.destination})`
+        : `Relaxed sunset stroll along ${params.destination} waterfront for recovery`,
+      estimatedActiveBurnKcal: calc.activeBurn,
+      totalDailyCalories: calc.intake,
+      hydrationLiters: params.activityLevel === 'active' ? 2.8 : 2.3,
+      dailyStepGoal: params.activityLevel === 'active' ? 11000 : params.activityLevel === 'moderate' ? 8500 : 6000,
+      dailyWeightTrendNote: isAr
+        ? calc.netDelta < 0
+          ? `عجز يومي ~${Math.abs(calc.netDelta)} سعرة لدعم حرق الدهون`
+          : calc.netDelta > 0
+          ? `فائض يومي ~+${calc.netDelta} سعرة لدعم البناء العضلي`
+          : `توازن سعرات مستقر للحفاظ على النشاط والصحة`
+        : `${calc.netDelta >= 0 ? '+' : ''}${calc.netDelta} kcal/day net balance`,
+      meals: [
+        {
+          mealType: isAr ? 'الإفطار' : isEl ? 'Πρωινό' : 'Breakfast',
+          venueOrSetting: pickDiningPlace(
+            idx * 4,
+            isAr ? `مقهى ومخبز صحي في ${params.destination}` : `Artisan Bakery & Café in ${params.destination}`
+          ),
+          dishName: isAr ? 'زبادي يوناني 2% مع شوفان وعسل وجوز' : 'Strained Greek Yogurt with Oats, Honey & Walnuts',
+          greekDishName: 'Γιαούρτι στραγγιστό με καρύδια',
+          foodCategory: isAr ? 'بروتين وألياف صباحية' : 'High-Protein Mediterranean',
+          portionGuide: params.goalType === 'weight_gain' ? '320g + 2 tbsp nuts' : '200g + 1 tsp honey',
+          calories: bKcal,
+          proteinGrams: Math.round((bKcal * 0.25) / 4),
+          carbsGrams: Math.round((bKcal * 0.45) / 4),
+          fatGrams: Math.round((bKcal * 0.3) / 9),
+          healthBenefitNote: isAr ? 'شبع طويل وطاقة متوازنة' : 'Sustained satiety & probiotics',
+        },
+        {
+          mealType: isAr ? 'الغداء' : isEl ? 'Μεσημεριανό' : 'Lunch',
+          venueOrSetting: pickDiningPlace(
+            idx * 4 + 1,
+            isAr ? `تافيرنا مأكولات بحرية في ${params.destination}` : `Seaside Seafood Taverna in ${params.destination}`
+          ),
+          dishName: isAr ? 'سمك دوراد مشوي مع سلطة خضار وزيت زيتون بكر' : 'Grilled Sea Bream with Horta Greens & Lemon Olive Oil',
+          greekDishName: 'Τσιπούρα ψητή με χόρτα',
+          foodCategory: isAr ? 'مأكولات بحرية مشوية' : 'Grilled Seafood & Greens',
+          portionGuide: params.goalType === 'weight_gain' ? '260g fish + whole-grain bread' : '180g fish + greens',
+          calories: lKcal,
+          proteinGrams: Math.round((lKcal * 0.35) / 4),
+          carbsGrams: Math.round((lKcal * 0.3) / 4),
+          fatGrams: Math.round((lKcal * 0.35) / 9),
+          healthBenefitNote: isAr ? 'غني بأوميغا-3 وبروتين صافي' : 'Omega-3 & lean protein',
+        },
+        {
+          mealType: isAr ? 'وجبة خفيفة' : isEl ? 'Σνακ' : 'Snack',
+          venueOrSetting: pickDiningPlace(
+            idx * 4 + 2,
+            isAr ? `مقهى تقليدي أو سوق ${params.destination}` : `Local Café / Agora Market in ${params.destination}`
+          ),
+          dishName: isAr ? 'تين طازج ولوز نيء غير مملح مع شاي أعشاب جبلية' : 'Fresh Seasonal Fruit & Raw Almonds with Mountain Tea',
+          greekDishName: 'Τσάι του βουνού με αμύγδαλα',
+          foodCategory: isAr ? 'مضادات أكسدة' : 'Antioxidants & Nuts',
+          portionGuide: params.goalType === 'weight_gain' ? '45g almonds + fruit' : '20g almonds + herbal tea',
+          calories: sKcal,
+          proteinGrams: Math.round((sKcal * 0.16) / 4),
+          carbsGrams: Math.round((sKcal * 0.44) / 4),
+          fatGrams: Math.round((sKcal * 0.4) / 9),
+          healthBenefitNote: isAr ? 'يدعم استقرار سكر الدم' : 'Blood-sugar friendly energy',
+        },
+        {
+          mealType: isAr ? 'العشاء' : isEl ? 'Δείπνο' : 'Dinner',
+          venueOrSetting: pickDiningPlace(
+            idx * 4 + 3,
+            isAr ? `مطعم مشويات عائلي في ${params.destination}` : `Traditional Grill Taverna in ${params.destination}`
+          ),
+          dishName: isAr ? 'دجاج سوفلاكي مشوي مع تزاتزيكي وسلطة داكوس' : 'Grilled Chicken Souvlaki Skewers with Tzatziki & Salad',
+          greekDishName: 'Σουβλάκι κοτόπουλο με τζατζίκι',
+          foodCategory: isAr ? 'مشويات خفيفة' : 'Lean Mediterranean Grill',
+          portionGuide: params.goalType === 'weight_gain' ? '240g chicken + pita' : '150g chicken + salad',
+          calories: dKcal,
+          proteinGrams: Math.round((dKcal * 0.36) / 4),
+          carbsGrams: Math.round((dKcal * 0.34) / 4),
+          fatGrams: Math.round((dKcal * 0.3) / 9),
+          healthBenefitNote: isAr ? 'خفيف للهضم المسائي وبناء العضلات' : 'Light evening protein recovery',
+        },
+      ],
+    };
+  });
+
+  const sign = calc.tripKg > 0 ? '+' : '';
+  return {
+    headline: isAr
+      ? `خطة ${params.destination} الغذائية والسياحية (${calc.safeDays} أيام)`
+      : isEl
+      ? `Πρόγραμμα Ευεξίας & Ταξιδιού ${params.destination} (${calc.safeDays} ημέρες)`
+      : `${params.destination} ${calc.safeDays}-Day Wellness & Nutrition Trip Schedule`,
+    destination: params.destination,
+    goalType: params.goalType,
+    durationDays: calc.safeDays,
+    summary: isAr
+      ? `جدول متكامل يجمع بين أفضل الأماكن السياحية والنشاط اليومي والوجبات اليونانية المحسوبة السعرات (${calc.intake} سعرة/يوم) لتحقيق هدفك بأمان.`
+      : `Balanced ${calc.safeDays}-day Greece itinerary pairing real cultural routes with portioned Mediterranean meals (${calc.intake} kcal/day).`,
+    recommendedDailyCalories: calc.intake,
+    estimatedDailyBurnCalories: calc.activeBurn,
+    dailyNetCalorieDelta: calc.netDelta,
+    expectedTripWeightChangeKg: calc.tripKg,
+    expectedTripWeightChangePercent: calc.tripPct,
+    projectedMonthlyChangeKg: calc.monthKg,
+    projectedMonthlyChangePercent: calc.monthPct,
+    weightProjectionLabel: isAr
+      ? `${sign}${calc.tripKg} كجم (${sign}${calc.tripPct}%) خلال ${calc.safeDays} أيام · ~${sign}${calc.monthPct}% شهرياً`
+      : `${sign}${calc.tripKg} kg (${sign}${calc.tripPct}%) over ${calc.safeDays} days · ~${sign}${calc.monthPct}% monthly pace`,
+    macroSplitSummary: isAr
+      ? '30% بروتين صافي · 40% كربوهيدرات معقدة · 30% دهون زيت زيتون صحية'
+      : '30% Lean Protein · 40% Complex Carbs · 30% Healthy Olive Oil Fats',
+    healthAdaptationSummary:
+      params.conditions.length > 0
+        ? (isAr ? `مُكيّف حسب حالتك الصحية: ${params.conditions.join('، ')}` : `Tailored for: ${params.conditions.join(', ')}`)
+        : isAr
+        ? 'نظام غذائي متوسطي متوازن ومضاد للالتهابات'
+        : 'Balanced anti-inflammatory Mediterranean profile',
+    medicalSafetyNote: isAr
+      ? 'تنبيه طبي: التقديرات استرشادية وتعتمد على الالتزام بالوجبات والحركة اليومية. يُنصح باستشارة طبيبك للحالات المزمنة.'
+      : 'Wellness notice: Calorie and weight projections are estimates; consult a healthcare professional for medical conditions.',
+    days,
+  };
+}
 
 // Cooldown timestamp when Google Search grounding hits a free-tier quota limit
 let searchGroundingCooldownUntil = 0;
@@ -4811,7 +5255,7 @@ app.post('/api/translate', translatorLimiter, async (req: Request, res: Response
 - DO NOT translate or alter: "id", "region", "dietary", "imageUrl", "greekName", "greekTitle", "pronunciation", "rating", "priceLevel", "coordinates", "officialWebsite".
 - Translate: "name", "title", "location", "description", "signatureDishes", "atmosphere", "insiderTip", "ingredients", "regionOfOrigin", "pairingDrink", "whyVisit", "bestTimeToVisit", "nearbyTavernaSuggestion".`;
   } else if (mode === 'itinerary') {
-    rules = `Translate EVERY human-readable field inside this 3-day travel itinerary JSON object into fluent, natural ${langName}.
+    rules = `Translate EVERY human-readable field inside this travel itinerary JSON object into fluent, natural ${langName}.
 - Keep ALL JSON keys and "dayNumber" values identical.`;
   } else {
     rules = `Translate EVERY human-readable text field in this Greece travel & culinary guide JSON object into fluent, natural ${langName} so there is zero untranslated leftover text from the previous language.
@@ -4919,7 +5363,7 @@ app.post('/api/translate', translatorLimiter, async (req: Request, res: Response
   }
 });
 
-// VIP 3-Day Greece Itinerary Generator Endpoint (Requires Paid Subscription or Admin)
+// VIP Greece Itinerary Generator Endpoint (1-Day Today Only or 7-Day Week Plan, Requires Paid Subscription or Admin)
 app.post('/api/itinerary', aiRecommendLimiter, requireSameOriginOrHeader, async (req: Request, res: Response) => {
   const access = await resolvePaidFeatureAccess(req, 'itinerary');
   if (!access.allowed) {
@@ -4931,10 +5375,19 @@ app.post('/api/itinerary', aiRecommendLimiter, requireSameOriginOrHeader, async 
     });
   }
 
-  const { city = 'Athens', foodType = 'Traditional Greek Cuisine', language = 'en', guideResult, healthProfile: rawItinHealth } = req.body || {};
+  const {
+    city = 'Athens',
+    foodType = 'Traditional Greek Cuisine',
+    language = 'en',
+    durationDays: rawDuration = 7,
+    guideResult,
+    healthProfile: rawItinHealth,
+  } = req.body || {};
   if (!guideResult) {
-    return res.status(400).json({ error: 'Search results are required to generate a 3-day itinerary.' });
+    return res.status(400).json({ error: 'Search results are required to generate a trip plan.' });
   }
+
+  const durationDays = Math.max(1, Math.min(14, Math.round(Number(rawDuration) || 7)));
 
   const sessionHealth = securityStore.healthProfiles?.[access.trialId];
   const bodyItinHealth = rawItinHealth ? sanitizeHealthProfile(rawItinHealth) : null;
@@ -4944,54 +5397,385 @@ app.post('/api/itinerary', aiRecommendLimiter, requireSameOriginOrHeader, async 
       : sessionHealth || { conditions: [], allergiesOrNotes: '', updatedAt: '' };
   const healthPromptBlock = buildHealthPromptBlock(effectiveHealth);
 
+  // Always fetch real regional dining venues for the selected Greek city/island
+  const liveCtx = await gatherLiveWebGrounding({
+    city,
+    foodType,
+  }).catch(() => ({ liveDining: [] as LiveOsmVenue[], liveHotels: [], liveSites: [], liveSources: [], contextDigest: '' }));
+
   const apiKey = process.env.GEMINI_API_KEY;
   const langName = resolveLanguageName(language);
 
-  if (apiKey) {
-    const ai = createServerGeminiClient(apiKey, 'v1beta', 22000);
-
-    const condensedContext = {
-      tavernas: (guideResult.tavernas || []).slice(0, 4).map((x: any) => `${x.name} (${x.location})`),
-      hotels: (guideResult.hotels || []).slice(0, 4).map((x: any) => `${x.name} (${x.priceLevel})`),
-      sites: (guideResult.archaeologicalSites || []).slice(0, 3).map((x: any) => `${x.name} (${x.bestTimeToVisit})`),
-      gems: (guideResult.hiddenGems || []).slice(0, 2).map((x: any) => x.title),
-      dishes: (guideResult.dishes || []).slice(0, 3).map((x: any) => x.name),
-    };
-
-    try {
-      const prompt = `Create a cohesive, practical 3-Day VIP Travel, Culinary & Archaeological Itinerary for "${city}" tailored to "${foodType}".
-Use the verified top-ranked places from these search results:
-${JSON.stringify(condensedContext)}
-${healthPromptBlock}
-
-Requirements:
-- Write EVERY single text field in fluent, natural ${langName}.
-- Organize Day 1, Day 2, and Day 3 with logical geographical flow, specific recommended dishes at the named tavernas, realistic timing for archaeological visits, sunset hidden gems, evening hotel stay context, and realistic Euro (€) daily budget estimates.`;
-
-      const result = await callGeminiWithFallback(ai, {
-        models: ['gemini-3.1-flash-lite', 'gemini-4-hydrogen'],
-        contents: prompt,
-        responseSchema: ITINERARY_RESPONSE_SCHEMA,
-        maxPasses: 1,
-        totalBudgetMs: 18000,
-        perAttemptTimeoutMs: 16000,
-      });
-
-      const itinerary = extractAndParseJSON(result.text || '{}');
-      return res.json({ itinerary });
-    } catch (err: any) {
-      console.log('[ITINERARY FALLBACK]', err?.message || err);
-    }
-  }
-
-  // Deterministic itinerary fallback structured cleanly from the active search results
   const fallbackItinerary = buildDeterministicItinerary({
     city,
     foodType,
     langCode: String(language || 'en'),
     guideResult,
+    durationDays,
+    liveDining: liveCtx.liveDining,
   });
+
+  if (apiKey) {
+    const ai = createServerGeminiClient(apiKey, 'v1beta', 28000);
+
+    const condensedContext = {
+      tavernas: (guideResult.tavernas || []).slice(0, 6).map((x: any) => `${x.name} (${x.location})`),
+      liveRegionalDining: liveCtx.liveDining.slice(0, 8).map((v) => `${v.name} (${v.category}, ${v.location})`),
+      hotels: (guideResult.hotels || []).slice(0, 4).map((x: any) => `${x.name} (${x.priceLevel})`),
+      sites: (guideResult.archaeologicalSites || []).slice(0, 5).map((x: any) => `${x.name} (${x.bestTimeToVisit})`),
+      gems: (guideResult.hiddenGems || []).slice(0, 4).map((x: any) => x.title),
+      dishes: (guideResult.dishes || []).slice(0, 5).map((x: any) => x.name),
+    };
+
+    try {
+      const scopeText =
+        durationDays === 1
+          ? `1-Day ("Today Only" single-day) VIP Travel & Culinary Plan`
+          : `${durationDays}-Day (${durationDays === 7 ? 'Full 1-Week' : `${durationDays} Days`}) VIP Travel & Culinary Plan`;
+
+      const prompt = `Create a cohesive, practical ${scopeText} for "${city}" tailored to "${foodType}".
+CRITICAL REQUIREMENT: Generate EXACTLY ${durationDays} day(s) in "days" array.
+For EVERY SINGLE DAY and EVERY MEAL (Breakfast "breakfastSpot", Lunch "lunchTaverna", and Dinner inside "dinnerAndStay"), you MUST recommend a REAL, NAMED, currently operating restaurant, café, bakery, or taverna specifically located in "${city}" (preferring the verified venues below and in the live regional directory):
+${JSON.stringify(condensedContext)}
+${healthPromptBlock}
+
+Requirements:
+- Write EVERY single text field in fluent, natural ${langName}.
+- Never leave meal venues generic; ALWAYS specify the real restaurant/bakery/taverna name + neighborhood in "${city}" and what to eat there.
+- Organize each day with logical geographical flow in "${city}", specific recommended dishes, realistic timing for visits, sunset hidden gems, evening hotel stay context, and realistic Euro (€) daily budget estimates.`;
+
+      const result = await callGeminiWithFallback(ai, {
+        models: ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'],
+        contents: prompt,
+        responseSchema: ITINERARY_RESPONSE_SCHEMA,
+        maxPasses: 1,
+        totalBudgetMs: 24000,
+        perAttemptTimeoutMs: 22000,
+      });
+
+      const itinerary = extractAndParseJSON(result.text || '{}');
+      if (itinerary && Array.isArray(itinerary.days) && itinerary.days.length > 0) {
+        const normalizedDays = itinerary.days.slice(0, durationDays).map((d: any, idx: number) => ({
+          ...d,
+          dayNumber: idx + 1,
+          breakfastSpot:
+            String(d?.breakfastSpot || '').trim() ||
+            fallbackItinerary.days[idx]?.breakfastSpot ||
+            liveCtx.liveDining[idx % Math.max(1, liveCtx.liveDining.length)]?.name ||
+            `${city} Bakery & Café`,
+        }));
+        return res.json({
+          itinerary: {
+            ...itinerary,
+            city: itinerary.city || city,
+            days: normalizedDays,
+          },
+        });
+      }
+    } catch (err: any) {
+      console.log('[ITINERARY FALLBACK]', err?.message || err);
+    }
+  }
+
   return res.json({ itinerary: fallbackItinerary, quotaFallback: true });
+});
+
+// Health & Weight-Goal Trip Planner + Grounded Web Search Endpoint (Requires +€3/mo Add-on or Free Unlimited Admin)
+app.post('/api/wellness-plan', aiRecommendLimiter, requireSameOriginOrHeader, async (req: Request, res: Response) => {
+  const access = await resolvePaidFeatureAccess(req, 'wellness');
+  if (!access.allowed) {
+    return res.status(access.status || 403).json({
+      error: access.error,
+      approvalRequired: true,
+      wellnessAddonRequired: Boolean(access.wellnessAddonRequired),
+      approvalStatus: access.approvalStatus || 'pending',
+    });
+  }
+
+  const {
+    destination = 'Athens',
+    goalType: rawGoal = 'weight_loss',
+    durationDays: rawDays = 7,
+    currentWeightKg: rawWeight = 75,
+    targetWeightKg: rawTargetWeight,
+    dailyCalorieTarget: rawCalorieTarget,
+    activityLevel: rawActivity = 'moderate',
+    customGoalNotes = '',
+    language = 'en',
+    healthProfile: rawHealth,
+  } = req.body || {};
+
+  const goalType: 'weight_loss' | 'weight_gain' | 'health_maintenance' =
+    rawGoal === 'weight_gain' || rawGoal === 'health_maintenance' ? rawGoal : 'weight_loss';
+  const activityLevel: 'light' | 'moderate' | 'active' =
+    rawActivity === 'light' || rawActivity === 'active' ? rawActivity : 'moderate';
+  const durationDays = Math.max(1, Math.min(14, Math.round(Number(rawDays) || 7)));
+  const currentWeightKg = Math.max(35, Math.min(240, Number(rawWeight) || 75));
+  const targetWeightKg =
+    rawTargetWeight !== undefined && rawTargetWeight !== '' && Number.isFinite(Number(rawTargetWeight))
+      ? Math.max(35, Math.min(240, Number(rawTargetWeight)))
+      : undefined;
+  const dailyCalorieTarget =
+    rawCalorieTarget !== undefined && rawCalorieTarget !== '' && Number.isFinite(Number(rawCalorieTarget))
+      ? Math.max(1100, Math.min(4500, Math.round(Number(rawCalorieTarget))))
+      : undefined;
+
+  const cleanDestination = String(destination || 'Athens').trim().slice(0, 120) || 'Athens';
+  const cleanNotes = String(customGoalNotes || '').trim().slice(0, 400);
+  const langName = resolveLanguageName(language);
+
+  const sessionHealth = securityStore.healthProfiles?.[access.trialId];
+  const bodyHealth = rawHealth ? sanitizeHealthProfile(rawHealth) : null;
+  const effectiveHealth =
+    bodyHealth && (bodyHealth.conditions.length > 0 || bodyHealth.allergiesOrNotes)
+      ? bodyHealth
+      : sessionHealth || { conditions: [], allergiesOrNotes: '', updatedAt: '' };
+  const healthPromptBlock = buildHealthPromptBlock(effectiveHealth);
+
+  // Fetch verified local restaurants, bakeries, cafés, and landmarks specifically in the selected region
+  const liveCtx = await gatherLiveWebGrounding({
+    city: cleanDestination,
+    foodType: goalType === 'weight_loss' ? 'seafood healthy grilled' : 'traditional greek taverna',
+    prompt: `${cleanNotes} ${effectiveHealth.conditions.join(' ')}`,
+  }).catch(() => ({
+    liveDining: [] as LiveOsmVenue[],
+    liveHotels: [] as LiveOsmVenue[],
+    liveSites: [] as LiveOsmVenue[],
+    liveSources: [] as Array<{ title: string; uri: string }>,
+    contextDigest: '',
+  }));
+
+  const baseline = computeWellnessBaselines({
+    goalType,
+    durationDays,
+    currentWeightKg,
+    dailyCalorieTarget,
+    activityLevel,
+  });
+
+  const goalDescription =
+    goalType === 'weight_loss'
+      ? `WEIGHT LOSS / FAT BURN PLAN (calorie deficit around ${baseline.intake} kcal/day, expected weight change ~${baseline.tripKg} kg / ${baseline.tripPct}% over ${durationDays} days)`
+      : goalType === 'weight_gain'
+      ? `HEALTHY WEIGHT GAIN / LEAN MUSCLE SURPLUS PLAN (calorie surplus around ${baseline.intake} kcal/day, expected weight change ~+${baseline.tripKg} kg / +${baseline.tripPct}% over ${durationDays} days)`
+      : `MEDICAL & HEALTH CONDITION MAINTENANCE PLAN (balanced energy around ${baseline.intake} kcal/day tailored to health safety)`;
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  const groundingSources: Array<{ title: string; uri: string }> = [];
+  let parsedPlan: any = null;
+  const startMs = Date.now();
+
+  if (apiKey) {
+    const ai = createServerGeminiClient(apiKey, 'v1beta', 28000);
+
+    const searchPrompt = `Search the web for real, currently open healthy restaurants, bakeries, cafés, traditional Greek tavernas, walkable landmarks, beaches/parks, and local dishes in "${cleanDestination}, Greece" to build a complete ${durationDays}-day Travel + Nutrition Schedule (${durationDays === 1 ? 'TODAY ONLY single-day plan' : `${durationDays}-day plan`}).
+
+LIVE VERIFIED DINING & LANDMARK DIRECTORY FOR ${cleanDestination.toUpperCase()}:
+${liveCtx.contextDigest || `Focus exclusively on real open dining venues and landmarks in ${cleanDestination}, Greece.`}
+
+USER GOAL & PROFILE:
+- Destination in Greece: ${cleanDestination}
+- Plan Scope: EXACTLY ${durationDays} day(s)
+- Primary Objective: ${goalDescription}
+- Current Weight: ${currentWeightKg} kg${targetWeightKg ? ` · Target Weight: ${targetWeightKg} kg` : ''}
+- Activity Level: ${activityLevel} (approx active burn ${baseline.activeBurn} kcal/day)
+- Target Daily Calorie Intake: ~${baseline.intake} kcal/day
+${cleanNotes ? `- Additional User Preference: ${cleanNotes}` : ''}
+${healthPromptBlock}
+
+REQUIRED DELIVERABLE (OUTPUT PURE VALID JSON ONLY):
+Generate EXACTLY ${durationDays} day(s) in "days" where EVERY day has:
+1. Real named places in ${cleanDestination}, Greece for morning, afternoon, and evening activities suited to the health profile & activity level.
+2. Specific 4 meals per day (Breakfast, Lunch, Snack, Dinner) where "venueOrSetting" MUST name a REAL restaurant, café, bakery, or taverna specifically located in "${cleanDestination}" (with neighborhood/street when available — never generic phrases), plus authentic Greek dishes tailored to the goal & health conditions, exact portion guides, realistic calories, protein/carb/fat grams, and health benefit note.
+3. Exact "totalDailyCalories" matching the sum of the day's meals, plus hydration liters and step goal.
+4. Expected weight change calculations ("expectedTripWeightChangeKg", "expectedTripWeightChangePercent", "projectedMonthlyChangeKg", "projectedMonthlyChangePercent") consistent with the caloric balance (${baseline.netDelta} kcal/day net vs maintenance).
+5. Write ALL human-readable fields in fluent, natural ${langName} (keep "greekDishName" in genuine Greek script alongside localized "dishName").
+6. Include a clear "medicalSafetyNote" disclaimer.`;
+
+    // Step 1: Grounded Web Search pass
+    let rawGroundedText = '';
+    if (Date.now() >= searchGroundingCooldownUntil) {
+      const groundedModels = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'].filter((m) => isModelAvailable(m));
+      for (const gModel of groundedModels) {
+        try {
+          const cfg: any = { tools: [{ googleSearch: {} }] };
+          if (gModel === 'gemini-4-hydrogen') {
+            cfg.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
+          }
+          const gRes = await withPromiseTimeout(
+            ai.models.generateContent({
+              model: gModel,
+              contents: searchPrompt,
+              config: cfg,
+            }),
+            16000,
+            `wellness-grounding-${gModel}`
+          );
+          rawGroundedText = gRes.text || '';
+          const chunks = gRes.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+          const seenUris = new Set<string>();
+          for (const chunk of chunks as any[]) {
+            const uri = sanitizeHttpUrl(String(chunk?.web?.uri || ''));
+            const title = String(chunk?.web?.title || '').trim();
+            if (uri && !seenUris.has(uri)) {
+              seenUris.add(uri);
+              groundingSources.push({ title: title || uri, uri });
+            }
+          }
+          if (rawGroundedText.trim()) break;
+        } catch (err: any) {
+          if (isQuotaError(err)) {
+            console.log(`[WELLNESS GROUNDING QUOTA] ${gModel}: falling back to structured generation.`);
+            continue;
+          }
+          if (isTransientRetryableError(err)) {
+            markModelTemporarilyBusy(gModel);
+            continue;
+          }
+        }
+      }
+    }
+
+    if (rawGroundedText) {
+      try {
+        const directParsed = extractAndParseJSON(rawGroundedText);
+        if (directParsed && Array.isArray(directParsed.days) && directParsed.days.length > 0) {
+          parsedPlan = directParsed;
+        }
+      } catch {
+        parsedPlan = null;
+      }
+
+      if (!parsedPlan && Date.now() - startMs < 24000) {
+        try {
+          const structured = await callGeminiWithFallback(ai, {
+            models: ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'],
+            contents: `Convert this researched ${durationDays}-day Greece wellness & nutrition trip plan into strict valid JSON matching the schema in fluent ${langName}. Preserve every real place, restaurant/venue name in ${cleanDestination}, dish, and calorie calculation:\n\n${rawGroundedText}`,
+            responseSchema: WELLNESS_PLAN_RESPONSE_SCHEMA,
+            maxPasses: 1,
+            totalBudgetMs: 16000,
+            perAttemptTimeoutMs: 14000,
+          });
+          parsedPlan = extractAndParseJSON(structured.text || '{}');
+        } catch {
+          parsedPlan = null;
+        }
+      }
+    }
+
+    // Step 2: Structured schema generation fallback if web-grounded output wasn't ready
+    if (!parsedPlan || !Array.isArray(parsedPlan.days) || parsedPlan.days.length === 0) {
+      try {
+        const directStructured = await callGeminiWithFallback(ai, {
+          models: ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'],
+          contents: searchPrompt,
+          responseSchema: WELLNESS_PLAN_RESPONSE_SCHEMA,
+          maxPasses: 2,
+          totalBudgetMs: 22000,
+          perAttemptTimeoutMs: 15000,
+        });
+        parsedPlan = extractAndParseJSON(directStructured.text || '{}');
+      } catch (err: any) {
+        console.log('[WELLNESS SCHEMA FALLBACK]', err?.message || err);
+      }
+    }
+  }
+
+  const fallbackPlan = buildDeterministicWellnessPlan({
+    destination: cleanDestination,
+    goalType,
+    durationDays,
+    currentWeightKg,
+    dailyCalorieTarget,
+    activityLevel,
+    langCode: String(language || 'en'),
+    conditions: effectiveHealth.conditions,
+    liveDining: liveCtx.liveDining,
+    liveSites: liveCtx.liveSites,
+  });
+
+  // Merge verified live directory sources with Google Search grounding links
+  const combinedSources = [...groundingSources];
+  const seenCombined = new Set(combinedSources.map((s) => s.uri));
+  for (const ls of liveCtx.liveSources || []) {
+    if (ls.uri && !seenCombined.has(ls.uri)) {
+      seenCombined.add(ls.uri);
+      combinedSources.push(ls);
+    }
+  }
+
+  const rawDaysList =
+    parsedPlan && Array.isArray(parsedPlan.days) && parsedPlan.days.length > 0
+      ? parsedPlan.days.slice(0, durationDays).map((day: any, dIdx: number) => {
+          const fbDay = fallbackPlan.days[dIdx] || fallbackPlan.days[0];
+          const meals = (Array.isArray(day?.meals) && day.meals.length > 0 ? day.meals : fbDay?.meals || []).map(
+            (meal: any, mIdx: number) => {
+              const fbMeal = fbDay?.meals?.[mIdx];
+              const rawVenue = String(meal?.venueOrSetting || '').trim();
+              const isGenericVenue =
+                !rawVenue ||
+                /^(local\s*(cafe|restaurant|taverna)|restaurant|cafe|hotel|مطعم محلي|مقهى محلي)$/i.test(rawVenue);
+              const liveVenue = liveCtx.liveDining[(dIdx * 4 + mIdx) % Math.max(1, liveCtx.liveDining.length)];
+              const resolvedVenue = !isGenericVenue
+                ? rawVenue
+                : liveVenue
+                ? `${liveVenue.name} (${liveVenue.location || cleanDestination})`
+                : fbMeal?.venueOrSetting || `${cleanDestination} Regional Dining`;
+              return {
+                ...meal,
+                venueOrSetting: resolvedVenue,
+              };
+            }
+          );
+          return {
+            ...day,
+            dayNumber: dIdx + 1,
+            meals,
+          };
+        })
+      : fallbackPlan.days;
+
+  const finalPlan =
+    parsedPlan && Array.isArray(parsedPlan.days) && parsedPlan.days.length > 0
+      ? {
+          ...fallbackPlan,
+          ...parsedPlan,
+          destination: cleanDestination,
+          goalType,
+          durationDays: rawDaysList.length,
+          days: rawDaysList,
+          recommendedDailyCalories: Number(parsedPlan.recommendedDailyCalories) || baseline.intake,
+          estimatedDailyBurnCalories: Number(parsedPlan.estimatedDailyBurnCalories) || baseline.activeBurn,
+          dailyNetCalorieDelta:
+            Number.isFinite(Number(parsedPlan.dailyNetCalorieDelta))
+              ? Number(parsedPlan.dailyNetCalorieDelta)
+              : baseline.netDelta,
+          expectedTripWeightChangeKg:
+            Number.isFinite(Number(parsedPlan.expectedTripWeightChangeKg))
+              ? Number(parsedPlan.expectedTripWeightChangeKg)
+              : baseline.tripKg,
+          expectedTripWeightChangePercent:
+            Number.isFinite(Number(parsedPlan.expectedTripWeightChangePercent))
+              ? Number(parsedPlan.expectedTripWeightChangePercent)
+              : baseline.tripPct,
+          projectedMonthlyChangeKg:
+            Number.isFinite(Number(parsedPlan.projectedMonthlyChangeKg))
+              ? Number(parsedPlan.projectedMonthlyChangeKg)
+              : baseline.monthKg,
+          projectedMonthlyChangePercent:
+            Number.isFinite(Number(parsedPlan.projectedMonthlyChangePercent))
+              ? Number(parsedPlan.projectedMonthlyChangePercent)
+              : baseline.monthPct,
+        }
+      : fallbackPlan;
+
+  return res.json({
+    plan: {
+      ...finalPlan,
+      groundingSources: combinedSources.slice(0, 10),
+      generatedAt: new Date().toISOString(),
+    },
+  });
 });
 
 // B2B Partner Inquiry Endpoint (stored privately in admin inbox; never leaks personal contact details)
@@ -5835,7 +6619,18 @@ app.get('/mobile-auth', (req: Request, res: Response) => {
       } catch (err) {
         btn.disabled = false;
         statusMsg.className = 'msg err';
-        statusMsg.textContent = err?.message || ${JSON.stringify(isAr ? 'تعذر إتمام تسجيل الدخول.' : 'Could not complete sign-in.')};
+        const code = String(err?.code || '');
+        const msgStr = String(err?.message || '');
+        if (code === 'auth/unauthorized-domain' || /unauthorized-domain/i.test(msgStr)) {
+          const host = window.location.hostname;
+          statusMsg.textContent = ${JSON.stringify(
+            isAr
+              ? 'هذا النطاق غير مضاف في Firebase Console. افتح Authentication → Settings → Authorized domains وأضف: '
+              : 'This domain is not authorized in Firebase Console. Add this domain under Authentication → Settings → Authorized domains: '
+          )} + host;
+        } else {
+          statusMsg.textContent = err?.message || ${JSON.stringify(isAr ? 'تعذر إتمام تسجيل الدخول.' : 'Could not complete sign-in.')};
+        }
       }
     });
   </script>

@@ -80,6 +80,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   const primaryNavItems: { id: ActiveTab; label: string }[] = [
     { id: 'matchmaker', label: t.nav.matchmaker },
+    { id: 'wellness', label: t.nav.wellness || (isAr ? 'خطة الصحة والوزن' : 'Health & Weight Planner') },
     { id: 'explore', label: t.nav.explore },
     { id: 'dishes', label: t.nav.dishes },
     { id: 'hidden-gems', label: t.nav.hiddenGems },

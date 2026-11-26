@@ -42,6 +42,7 @@ service cloud.firestore {
           'searchesRemaining', 'isPremium', 'subscriptionPlan',
           'approvalStatus', 'requestedPlan', 'subscriptionExpiresAt',
           'paymentNote', 'approvedBy', 'approvedAt',
+          'wellnessAddonActive', 'wellnessAddonExpiresAt', 'wellnessAddonRequested',
           'termsAccepted', 'createdAt', 'updatedAt'
         ])
         && data.keys().hasOnly([
@@ -49,6 +50,7 @@ service cloud.firestore {
           'searchesRemaining', 'isPremium', 'subscriptionPlan',
           'approvalStatus', 'requestedPlan', 'subscriptionExpiresAt',
           'paymentNote', 'approvedBy', 'approvedAt',
+          'wellnessAddonActive', 'wellnessAddonExpiresAt', 'wellnessAddonRequested',
           'termsAccepted', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.uid)
@@ -65,6 +67,9 @@ service cloud.firestore {
         && data.paymentNote is string && data.paymentNote.size() <= 300
         && data.approvedBy is string && data.approvedBy.size() <= 200
         && data.approvedAt is string && data.approvedAt.size() <= 40
+        && data.wellnessAddonActive is bool
+        && data.wellnessAddonExpiresAt is string && data.wellnessAddonExpiresAt.size() <= 40
+        && data.wellnessAddonRequested is bool
         && data.termsAccepted is bool && data.termsAccepted == true;
     }
 
@@ -158,12 +163,15 @@ service cloud.firestore {
             incoming().searchesRemaining == 2 &&
             incoming().subscriptionExpiresAt == '' &&
             incoming().approvedBy == '' &&
-            incoming().approvedAt == ''
+            incoming().approvedAt == '' &&
+            incoming().wellnessAddonActive == false &&
+            incoming().wellnessAddonExpiresAt == ''
           )
         );
 
-      // Strictly lock approvalStatus, isPremium, subscriptionPlan, approvedBy, approvedAt to Admin ONLY;
-      // Allow pending non-admin owners ONLY to edit profile/request fields or decrement free trials downward (2 -> 1 -> 0)
+      // Strictly lock approvalStatus, isPremium, subscriptionPlan, approvedBy, approvedAt,
+      // and wellnessAddonActive / wellnessAddonExpiresAt to Admin ONLY;
+      // Allow non-admin owners ONLY to edit profile/request fields, decrement free trials, or safely backfill schema keys
       allow update: if isValidId(userId)
         && (isOwner(userId) || isAdmin())
         && isValidUserProfile(incoming(), userId)
@@ -175,8 +183,18 @@ service cloud.firestore {
           isAdmin() ||
           (
             incoming().diff(existing()).affectedKeys().hasOnly([
-              'displayName', 'photoURL', 'requestedPlan', 'paymentNote', 'termsAccepted', 'updatedAt'
+              'displayName', 'photoURL', 'requestedPlan', 'paymentNote',
+              'wellnessAddonRequested', 'termsAccepted', 'updatedAt'
             ])
+          ) ||
+          (
+            !('wellnessAddonActive' in existing()) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'wellnessAddonActive', 'wellnessAddonExpiresAt', 'wellnessAddonRequested',
+              'displayName', 'photoURL', 'requestedPlan', 'paymentNote', 'termsAccepted', 'updatedAt'
+            ]) &&
+            incoming().wellnessAddonActive == false &&
+            incoming().wellnessAddonExpiresAt == ''
           ) ||
           (
             existing().approvalStatus == 'pending' &&
@@ -202,7 +220,10 @@ service cloud.firestore {
             incoming().subscriptionExpiresAt == '' &&
             incoming().paymentNote == '' &&
             incoming().approvedBy == '' &&
-            incoming().approvedAt == ''
+            incoming().approvedAt == '' &&
+            incoming().wellnessAddonActive == false &&
+            incoming().wellnessAddonExpiresAt == '' &&
+            incoming().wellnessAddonRequested == false
           )
         );
 

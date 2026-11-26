@@ -50,6 +50,9 @@ export interface User {
   planExpiresAt?: string | null;
   approvedBy?: string;
   approvedAt?: string | null;
+  wellnessAddonActive?: boolean;
+  wellnessAddonExpiresAt?: string | null;
+  wellnessAddonRequested?: boolean;
   codeHint?: string | null;
   healthProfile?: HealthProfile;
 }
@@ -68,6 +71,9 @@ export interface FirestoreUserRecord {
   paymentNote: string;
   approvedBy: string;
   approvedAt: string;
+  wellnessAddonActive: boolean;
+  wellnessAddonExpiresAt: string;
+  wellnessAddonRequested: boolean;
   termsAccepted: boolean;
   createdAt: string;
   updatedAt: string;
@@ -227,6 +233,7 @@ export interface ItineraryDay {
   dayNumber: number;
   title: string;
   morning: string;
+  breakfastSpot?: string;
   lunchTaverna: string;
   afternoon: string;
   sunsetGem: string;
@@ -346,8 +353,73 @@ export interface DailyPicksResult {
   generatedAt: string;
 }
 
+export type WellnessGoalType = 'weight_loss' | 'weight_gain' | 'health_maintenance';
+export type WellnessActivityLevel = 'light' | 'moderate' | 'active';
+
+export interface WellnessMealEntry {
+  mealType: string;
+  venueOrSetting: string;
+  dishName: string;
+  greekDishName: string;
+  foodCategory: string;
+  portionGuide: string;
+  calories: number;
+  proteinGrams: number;
+  carbsGrams: number;
+  fatGrams: number;
+  healthBenefitNote: string;
+}
+
+export interface WellnessDaySchedule {
+  dayNumber: number;
+  dayTitle: string;
+  morningPlaceAndActivity: string;
+  afternoonPlaceAndActivity: string;
+  eveningPlaceAndActivity: string;
+  estimatedActiveBurnKcal: number;
+  totalDailyCalories: number;
+  hydrationLiters: number;
+  dailyStepGoal: number;
+  dailyWeightTrendNote: string;
+  meals: WellnessMealEntry[];
+}
+
+export interface WellnessPlanRequest {
+  destination: string;
+  goalType: WellnessGoalType;
+  durationDays: number;
+  currentWeightKg: number;
+  targetWeightKg?: number;
+  dailyCalorieTarget?: number;
+  activityLevel: WellnessActivityLevel;
+  customGoalNotes?: string;
+}
+
+export interface WellnessPlanResult {
+  headline: string;
+  destination: string;
+  goalType: WellnessGoalType;
+  durationDays: number;
+  summary: string;
+  recommendedDailyCalories: number;
+  estimatedDailyBurnCalories: number;
+  dailyNetCalorieDelta: number;
+  expectedTripWeightChangeKg: number;
+  expectedTripWeightChangePercent: number;
+  projectedMonthlyChangeKg: number;
+  projectedMonthlyChangePercent: number;
+  weightProjectionLabel: string;
+  macroSplitSummary: string;
+  healthAdaptationSummary: string;
+  medicalSafetyNote: string;
+  days: WellnessDaySchedule[];
+  groundingSources?: GroundingSource[];
+  generatedAt: string;
+}
+
 export type ActiveTab =
   | 'matchmaker'
+  | 'wellness'
   | 'translator'
   | 'explore'
   | 'dishes'

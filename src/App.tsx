@@ -32,6 +32,7 @@ import { AuthGateScreen } from './components/AuthGateScreen';
 import { AccountStatusBanner } from './components/AccountStatusBanner';
 import { SubscriberDashboardModal } from './components/SubscriberDashboardModal';
 import { MatchmakerView } from './components/MatchmakerView';
+import { WellnessPlannerView } from './components/WellnessPlannerView';
 import { LiveTranslatorView } from './components/LiveTranslatorView';
 import { ExploreView } from './components/ExploreView';
 import { DishesView } from './components/DishesView';
@@ -588,6 +589,16 @@ export default function App() {
             onSyncUser={(updatedUser) => setUser(updatedUser)}
             healthProfile={healthProfile}
             onOpenHealthSettings={() => setIsHealthOpen(true)}
+          />
+        )}
+
+        {activeTab === 'wellness' && (
+          <WellnessPlannerView
+            currentLang={currentLang}
+            user={user}
+            healthProfile={healthProfile}
+            onOpenHealthSettings={() => setIsHealthOpen(true)}
+            onSyncUser={(updatedUser) => setUser(updatedUser)}
           />
         )}
 
