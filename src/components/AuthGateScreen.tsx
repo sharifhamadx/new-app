@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { Capacitor } from '@capacitor/core';
-import { Browser } from '@capacitor/browser';
 import { Language, SubscriptionPlan, Theme, User } from '../types';
 import {
   SUPPORTED_LANGUAGES,
@@ -13,6 +12,7 @@ import {
   isNativeAppPlatform,
   setCustomApiBaseUrl,
 } from '../utils/apiBase';
+import { launchNativeMobileGoogleAuth } from '../utils/mobileAuthBridge';
 import { testBackendHealth } from '../utils/sessionClient';
 import {
   FIREBASE_PROJECT_ID,
@@ -154,8 +154,20 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
               : 'Please configure your Render server URL above first to sign in with Google.'
           );
         }
-        await Browser.open({
-          url: `${base}/mobile-auth?lang=${encodeURIComponent(currentLang)}`,
+        setSuccessMsg(
+          isAr
+            ? 'أكمل تسجيل الدخول عبر Google في المتصفح المفتوح، وسيتم إرجاعك تلقائياً للتطبيق...'
+            : 'Complete Google Sign-In in the opened browser — you will return to AEGEA automatically...'
+        );
+        await launchNativeMobileGoogleAuth({
+          baseUrl: base,
+          lang: currentLang,
+          onAuthenticated: (syncedUser) => {
+            onAuthenticated(syncedUser);
+          },
+          onError: (err: any) => {
+            setErrorMsg(err?.message || t.auth.signInGenericError);
+          },
         });
         setLoading(false);
         return;
@@ -176,8 +188,8 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
         setUnauthorizedHost(host || 'new-app-a81o.onrender.com');
         setErrorMsg(
           isAr
-            ? `النطاق (${host}) غير مضاف بعد في النطاقات المصرح بها لزر Google. يمكنك إضافته أدناه، أو تسجيل الدخول فوراً عبر البريد الإلكتروني وكلمة المرور الآن دون انتظار.`
-            : `Domain "${host}" is not yet in Firebase Authorized domains for the Google popup. Add it below, or sign in immediately using Email & Password below.`
+            ? `يتطلب تسجيل دخول Google تفعيل النطاق (${host}) في Firebase Console، أو الدخول بالبريد وكلمة المرور أدناه.`
+            : `Google Sign-In requires "${host}" in Firebase Authorized domains, or sign in with Email & Password below.`
         );
       } else {
         setErrorMsg(err?.message || t.auth.signInGenericError);
@@ -544,15 +556,10 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
                         >
                           <ExternalLink className="w-3.5 h-3.5" />
                           <span>
-                            {isAr ? 'فتح Firebase Authorized Domains' : 'Open Firebase Console Settings'}
+                            {isAr ? 'إضافة النطاق في Firebase' : 'Add Domain in Firebase'}
                           </span>
                         </a>
                       </div>
-                      <p className="text-[11px] text-rose-700 dark:text-rose-300 leading-relaxed">
-                        {isAr
-                          ? 'ملاحظة: تسجيل الدخول بالبريد الإلكتروني وكلمة المرور أدناه يعمل فوراً على Render بدون إضافة النطاق. وإذا كان حسابك منشأً بـ Google فقط، اكتب بريدك أدناه واضغط "نسيت / تعيين كلمة مرور" لإعداده خلال ثوانٍ.'
-                          : 'Note: Email & Password sign-in below works immediately on Render without adding the domain. If your account only used Google before, enter your email below and click "Forgot / Set Password".'}
-                      </p>
                     </div>
                   )}
                 </div>

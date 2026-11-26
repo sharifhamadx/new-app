@@ -87,6 +87,14 @@ if (fs.existsSync(manifestPath)) {
     manifest = manifest.replace('<application', `${missingTags.join('\n    ')}\n\n    <application`);
   }
 
+  // Ensure MainActivity uses singleTask so deep links reuse the active WebView instead of opening a blank duplicate instance
+  if (manifest.includes('android:name=".MainActivity"') && !manifest.includes('android:launchMode="singleTask"')) {
+    manifest = manifest.replace(
+      'android:name=".MainActivity"',
+      'android:name=".MainActivity"\n            android:launchMode="singleTask"'
+    );
+  }
+
   // Register custom scheme deep-link for Google Sign-In Chrome Custom Tab callback (com.aegea.smartguide://auth)
   if (!manifest.includes('android:scheme="com.aegea.smartguide"') && manifest.includes('</activity>')) {
     const authIntentFilter = `

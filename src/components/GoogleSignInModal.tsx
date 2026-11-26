@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Capacitor } from '@capacitor/core';
-import { Browser } from '@capacitor/browser';
 import { Language, SubscriptionPlan, User } from '../types';
 import { useUiTranslation } from '../hooks/useTranslatedContent';
 import { apiUrl, getActiveApiBaseUrl } from '../utils/apiBase';
+import { launchNativeMobileGoogleAuth } from '../utils/mobileAuthBridge';
 import {
   FIREBASE_PROJECT_ID,
   registerWithEmail,
@@ -141,8 +141,20 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
               : 'Configure your Render Server URL first or sign in with Email & Password below.'
           );
         }
-        await Browser.open({
-          url: `${base}/mobile-auth?lang=${encodeURIComponent(currentLang)}`,
+        setSuccessMsg(
+          isAr
+            ? 'أكمل تسجيل الدخول عبر Google في المتصفح المفتوح، وسيتم إرجاعك تلقائياً للتطبيق...'
+            : 'Complete Google Sign-In in the opened browser — you will return to AEGEA automatically...'
+        );
+        await launchNativeMobileGoogleAuth({
+          baseUrl: base,
+          lang: currentLang,
+          onAuthenticated: (syncedUser) => {
+            finalizeSignedInUser(syncedUser);
+          },
+          onError: (err: any) => {
+            setErrorMsg(err?.message || t.auth.signInGenericError);
+          },
         });
         setLoading(false);
         return;
@@ -163,8 +175,8 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
         setUnauthorizedHost(host || 'new-app-a81o.onrender.com');
         setErrorMsg(
           isAr
-            ? `النطاق (${host}) غير مضاف بعد في النطاقات المصرح بها لزر Google. أضفه أدناه، أو سجّل الدخول فوراً بالبريد الإلكتروني وكلمة المرور أدناه.`
-            : `Domain "${host}" is not yet in Firebase Authorized domains. Add it below, or sign in immediately with Email & Password below.`
+            ? `يتطلب تسجيل دخول Google تفعيل النطاق (${host}) في Firebase Console، أو الدخول بالبريد وكلمة المرور أدناه.`
+            : `Google Sign-In requires "${host}" in Firebase Authorized domains, or sign in with Email & Password below.`
         );
       } else {
         setErrorMsg(err?.message || t.auth.signInGenericError);

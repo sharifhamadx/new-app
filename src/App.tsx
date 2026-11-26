@@ -16,7 +16,6 @@ import {
   firebaseSignOut,
   reloadCurrentFirebaseUser,
   resendVerificationEmail,
-  signInWithGoogleMobileTokens,
   subscribeUserProfile,
   syncSignedInUserProfile,
   adminListSubscribers,
@@ -27,6 +26,12 @@ import {
   signOutSession,
   warmUpBackendIfNative,
 } from './utils/sessionClient';
+import { getActiveApiBaseUrl } from './utils/apiBase';
+import {
+  handleMobileAuthCallbackUrl,
+  loadPendingMobileAuth,
+  pollAndClaimMobileAuth,
+} from './utils/mobileAuthBridge';
 import { Navbar } from './components/Navbar';
 import { AuthGateScreen } from './components/AuthGateScreen';
 import { AccountStatusBanner } from './components/AccountStatusBanner';
@@ -171,7 +176,7 @@ export default function App() {
     void warmUpBackendIfNative();
   }, []);
 
-  // Native Capacitor Google Sign-In Deep Link callback handler (com.aegea.smartguide://auth)
+  // Native Capacitor Google Sign-In Deep Link & Background Poll callback handler
   useEffect(() => {
     let isNative = false;
     try {
@@ -182,20 +187,47 @@ export default function App() {
     if (!isNative) return;
 
     let removed = false;
-    let listenerHandle: { remove: () => Promise<void> } | null = null;
+    const handles: Array<{ remove: () => Promise<void> }> = [];
 
-    CapacitorApp.addListener('appUrlOpen', async ({ url }) => {
-      if (!url || !url.startsWith('com.aegea.smartguide://auth')) return;
+    const applyClaimedUser = (claimedUser: User | null) => {
+      if (!claimedUser || removed) return false;
+      setUser(claimedUser);
+      setIsSignInOpen(false);
+      return true;
+    };
+
+    const tryClaimPending = async () => {
+      const pending = loadPendingMobileAuth();
+      if (!pending) return;
       try {
-        await Browser.close().catch(() => {});
-        const queryPart = url.split('?')[1] || '';
-        const params = new URLSearchParams(queryPart.split('#')[0]);
-        const idToken = params.get('idToken');
-        const accessToken = params.get('accessToken');
-        if (idToken || accessToken) {
-          const fbUser = await signInWithGoogleMobileTokens(idToken, accessToken);
-          await syncSignedInUserProfile(fbUser);
-          setIsSignInOpen(false);
+        const claimed = await pollAndClaimMobileAuth(pending.session, pending.baseUrl);
+        applyClaimedUser(claimed);
+      } catch (err) {
+        console.error('Native mobile Google auth poll error:', err);
+      }
+    };
+
+    // 1. Handle cold-start deep link launch
+    void CapacitorApp.getLaunchUrl()
+      .then(async (launch) => {
+        if (removed) return;
+        if (launch?.url) {
+          const claimed = await handleMobileAuthCallbackUrl(launch.url, getActiveApiBaseUrl());
+          if (applyClaimedUser(claimed)) return;
+        }
+        await tryClaimPending();
+      })
+      .catch(() => {
+        void tryClaimPending();
+      });
+
+    // 2. Handle warm-resume deep link launch (intent:// or com.aegea.smartguide://auth)
+    void CapacitorApp.addListener('appUrlOpen', async ({ url }) => {
+      if (!url || !url.toLowerCase().startsWith('com.aegea.smartguide://auth')) return;
+      try {
+        const claimed = await handleMobileAuthCallbackUrl(url, getActiveApiBaseUrl());
+        if (!applyClaimedUser(claimed)) {
+          await tryClaimPending();
         }
       } catch (err) {
         console.error('Native mobile Google auth callback error:', err);
@@ -204,14 +236,38 @@ export default function App() {
       if (removed) {
         void handle.remove();
       } else {
-        listenerHandle = handle;
+        handles.push(handle);
+      }
+    });
+
+    // 3. Recover automatically when app returns to foreground (e.g. if Android blocked deep-link redirect)
+    void CapacitorApp.addListener('appStateChange', ({ isActive }) => {
+      if (isActive) {
+        void tryClaimPending();
+      }
+    }).then((handle) => {
+      if (removed) {
+        void handle.remove();
+      } else {
+        handles.push(handle);
+      }
+    });
+
+    // 4. Recover immediately when user closes Chrome Custom Tab manually
+    void Browser.addListener('browserFinished', () => {
+      void tryClaimPending();
+    }).then((handle) => {
+      if (removed) {
+        void handle.remove();
+      } else {
+        handles.push(handle);
       }
     });
 
     return () => {
       removed = true;
-      if (listenerHandle) {
-        void listenerHandle.remove();
+      for (const h of handles) {
+        void h.remove();
       }
     };
   }, []);
