@@ -15,6 +15,7 @@ import {
 } from '../utils/apiBase';
 import { testBackendHealth } from '../utils/sessionClient';
 import {
+  FIREBASE_PROJECT_ID,
   firebaseSignOut,
   registerWithEmail,
   reloadCurrentFirebaseUser,
@@ -31,6 +32,7 @@ import {
   CheckCircle2,
   CheckSquare,
   Compass,
+  Copy,
   ExternalLink,
   Globe,
   Loader2,
@@ -85,6 +87,8 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
 
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [unauthorizedHost, setUnauthorizedHost] = useState<string | null>(null);
+  const [domainCopied, setDomainCopied] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   // Native APK Render Server URL setup
@@ -129,6 +133,7 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
 
     setLoading(true);
     setErrorMsg(null);
+    setUnauthorizedHost(null);
     setSuccessMsg(null);
 
     try {
@@ -168,10 +173,11 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
         setErrorMsg(t.auth.popupBlockedError);
       } else if (code === 'auth/unauthorized-domain' || /unauthorized-domain/i.test(msgStr)) {
         const host = typeof window !== 'undefined' ? window.location.hostname : '';
+        setUnauthorizedHost(host || 'new-app-a81o.onrender.com');
         setErrorMsg(
           isAr
-            ? `النطاق (${host}) غير مضاف بعد في النطاقات المصرح بها (Authorized domains) داخل Firebase Console لمشروع gen-lang-client-0788378547. أضف "${host}" في Authentication → Settings → Authorized domains ثم أعد المحاولة، أو سجّل الدخول بالبريد الإلكتروني وكلمة المرور أدناه.`
-            : `Domain "${host}" is not yet in Firebase Console Authorized domains (Authentication → Settings → Authorized domains). Add "${host}" and retry, or sign in with Email & Password below.`
+            ? `النطاق (${host}) غير مضاف بعد في النطاقات المصرح بها لزر Google. يمكنك إضافته أدناه، أو تسجيل الدخول فوراً عبر البريد الإلكتروني وكلمة المرور الآن دون انتظار.`
+            : `Domain "${host}" is not yet in Firebase Authorized domains for the Google popup. Add it below, or sign in immediately using Email & Password below.`
         );
       } else {
         setErrorMsg(err?.message || t.auth.signInGenericError);
@@ -200,6 +206,7 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
 
     setLoading(true);
     setErrorMsg(null);
+    setUnauthorizedHost(null);
     setSuccessMsg(null);
 
     try {
@@ -222,21 +229,22 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
       if (code === 'auth/operation-not-allowed') {
         setErrorMsg(
           isAr
-            ? 'تسجيل الدخول بالبريد وكلمة المرور غير مفعّل بعد في Firebase Console (Authentication → Sign-in method → Email/Password). يمكنك الدخول الآن فوراً بزر Google أعلاه.'
-            : 'Email/Password sign-in is not yet enabled in Firebase Console. Use Google Sign-In above right now.'
+            ? 'تسجيل الدخول بالبريد وكلمة المرور غير مفعّل بعد في Firebase Console (Authentication → Sign-in method → Email/Password).'
+            : 'Email/Password sign-in is not yet enabled in Firebase Console.'
         );
       } else if (code === 'auth/unauthorized-domain' || /unauthorized-domain/i.test(msgStr)) {
         const host = typeof window !== 'undefined' ? window.location.hostname : '';
+        setUnauthorizedHost(host || 'new-app-a81o.onrender.com');
         setErrorMsg(
           isAr
-            ? `يرجى إضافة النطاق "${host}" إلى Authorized domains في Firebase Console (Authentication → Settings → Authorized domains).`
-            : `Please add "${host}" to Authorized domains in Firebase Console (Authentication → Settings → Authorized domains).`
+            ? `يرجى إضافة النطاق "${host}" إلى Authorized domains في Firebase Console.`
+            : `Please add "${host}" to Authorized domains in Firebase Console.`
         );
       } else if (code === 'auth/email-already-in-use') {
         setErrorMsg(
           isAr
-            ? 'هذا البريد الإلكتروني مسجل مسبقاً. قم بتسجيل الدخول بدلاً من ذلك.'
-            : 'This email is already registered. Please sign in instead.'
+            ? 'هذا البريد الإلكتروني مسجل مسبقاً (ربما عبر Google). انتقل لتسجيل الدخول، وإذا لم تكن قد عيّنت كلمة مرور له فاضغط "نسيت / تعيين كلمة مرور" لإرسال رابط تعيين كلمة مرور لبريدك.'
+            : 'This email is already registered (possibly via Google). Switch to Sign In and click "Forgot / Set Password" if you need to create a password for it.'
         );
         setAuthMode('signin');
       } else if (
@@ -244,7 +252,11 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
         code === 'auth/wrong-password' ||
         code === 'auth/user-not-found'
       ) {
-        setErrorMsg(isAr ? 'البريد الإلكتروني أو كلمة المرور غير صحيحة.' : 'Incorrect email or password.');
+        setErrorMsg(
+          isAr
+            ? 'البريد الإلكتروني أو كلمة المرور غير صحيحة. إذا كنت تدخل سابقاً بحساب Google فقط، اضغط "نسيت / تعيين كلمة مرور" أدناه لإرسال رابط تعيين كلمة مرور لبريدك والدخول فوراً على Render.'
+            : 'Incorrect email or password. If you previously signed in with Google only, click "Forgot / Set Password" below to set a password and sign in on this domain.'
+        );
       } else {
         setErrorMsg(err?.message || t.auth.signInGenericError);
       }
@@ -486,9 +498,63 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
             {/* Right Sign-In / Sign-Up Form Panel */}
             <div className="lg:col-span-7 p-6 sm:p-9 space-y-5">
               {errorMsg && (
-                <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs flex items-start gap-2.5">
-                  <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
-                  <span className="leading-relaxed">{errorMsg}</span>
+                <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs space-y-2.5">
+                  <div className="flex items-start gap-2.5">
+                    <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+                    <span className="leading-relaxed">{errorMsg}</span>
+                  </div>
+
+                  {unauthorizedHost && (
+                    <div className="pt-2 border-t border-rose-200/80 dark:border-rose-800/70 space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              await navigator.clipboard.writeText(unauthorizedHost);
+                              setDomainCopied(true);
+                              window.setTimeout(() => setDomainCopied(false), 2500);
+                            } catch {
+                              // ignore clipboard fallback
+                            }
+                          }}
+                          className="px-2.5 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-rose-300 dark:border-rose-700 text-[#082F5E] dark:text-white font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                        >
+                          {domainCopied ? (
+                            <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          ) : (
+                            <Copy className="w-3.5 h-3.5" />
+                          )}
+                          <span>
+                            {domainCopied
+                              ? isAr
+                                ? `تم نسخ ${unauthorizedHost}`
+                                : `Copied ${unauthorizedHost}`
+                              : isAr
+                              ? `نسخ النطاق: ${unauthorizedHost}`
+                              : `Copy: ${unauthorizedHost}`}
+                          </span>
+                        </button>
+
+                        <a
+                          href={`https://console.firebase.google.com/project/${FIREBASE_PROJECT_ID}/authentication/settings`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-2.5 py-1.5 rounded-lg bg-[#0D5EAF] text-white font-bold inline-flex items-center gap-1.5 hover:bg-[#0A4A8B]"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          <span>
+                            {isAr ? 'فتح Firebase Authorized Domains' : 'Open Firebase Console Settings'}
+                          </span>
+                        </a>
+                      </div>
+                      <p className="text-[11px] text-rose-700 dark:text-rose-300 leading-relaxed">
+                        {isAr
+                          ? 'ملاحظة: تسجيل الدخول بالبريد الإلكتروني وكلمة المرور أدناه يعمل فوراً على Render بدون إضافة النطاق. وإذا كان حسابك منشأً بـ Google فقط، اكتب بريدك أدناه واضغط "نسيت / تعيين كلمة مرور" لإعداده خلال ثوانٍ.'
+                          : 'Note: Email & Password sign-in below works immediately on Render without adding the domain. If your account only used Google before, enter your email below and click "Forgot / Set Password".'}
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -685,7 +751,7 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
                             onClick={handleForgotPassword}
                             className="text-[11px] font-semibold text-[#0D5EAF] dark:text-sky-400 hover:underline cursor-pointer"
                           >
-                            {t.auth.forgotPasswordBtn}
+                            {isAr ? 'نسيت / تعيين كلمة مرور' : t.auth.forgotPasswordBtn}
                           </button>
                         )}
                       </div>
