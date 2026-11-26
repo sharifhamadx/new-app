@@ -32,10 +32,7 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isVerified() && (
-        request.auth.token.email == 'sharifhamadx122@gmail.com' ||
-        request.auth.token.email == 'sharifhamadmoko@gmail.com'
-      );
+      return isVerified() && request.auth.token.email == 'sharifhamadx122@gmail.com';
     }
 
     // 3. Validation Blueprints (synchronized verbatim with firebase-blueprint.json)
@@ -144,7 +141,7 @@ service cloud.firestore {
       allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
       allow list: if isAdmin();
 
-      // Every newly registered non-admin user MUST start pending admin approval & subscription payment
+      // Every newly registered non-admin user starts with 2 free trials & pending paid approval
       allow create: if isValidId(userId)
         && isOwner(userId)
         && isValidUserProfile(incoming(), userId)
@@ -158,14 +155,15 @@ service cloud.firestore {
             incoming().approvalStatus == 'pending' &&
             incoming().isPremium == false &&
             incoming().subscriptionPlan == 'free' &&
-            incoming().searchesRemaining == 0 &&
+            incoming().searchesRemaining == 2 &&
             incoming().subscriptionExpiresAt == '' &&
             incoming().approvedBy == '' &&
             incoming().approvedAt == ''
           )
         );
 
-      // Strictly lock approvalStatus, isPremium, subscriptionPlan, searchesRemaining, approvedBy, approvedAt to Admin ONLY
+      // Strictly lock approvalStatus, isPremium, subscriptionPlan, approvedBy, approvedAt to Admin ONLY;
+      // Allow pending non-admin owners ONLY to edit profile/request fields or decrement free trials downward (2 -> 1 -> 0)
       allow update: if isValidId(userId)
         && (isOwner(userId) || isAdmin())
         && isValidUserProfile(incoming(), userId)
@@ -181,12 +179,28 @@ service cloud.firestore {
             ])
           ) ||
           (
-            !('approvalStatus' in existing()) &&
+            existing().approvalStatus == 'pending' &&
+            existing().isPremium == false &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'searchesRemaining', 'updatedAt'
+            ]) &&
+            incoming().searchesRemaining is int &&
+            incoming().searchesRemaining >= 0 &&
+            incoming().searchesRemaining <= 2 &&
+            incoming().searchesRemaining <= existing().searchesRemaining
+          ) ||
+          (
+            (
+              !('approvalStatus' in existing()) ||
+              existing().approvedBy == request.auth.token.email ||
+              existing().paymentNote == 'Site Administrator'
+            ) &&
             incoming().approvalStatus == 'pending' &&
             incoming().isPremium == false &&
             incoming().subscriptionPlan == 'free' &&
-            incoming().searchesRemaining == 0 &&
+            incoming().searchesRemaining == 2 &&
             incoming().subscriptionExpiresAt == '' &&
+            incoming().paymentNote == '' &&
             incoming().approvedBy == '' &&
             incoming().approvedAt == ''
           )

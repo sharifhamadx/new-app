@@ -21,16 +21,13 @@ import {
   CheckCircle2,
   Loader2,
   AlertCircle,
-  Users,
 } from 'lucide-react';
 
 interface AccountStatusBannerProps {
   currentLang: Language;
   user: User | null;
   authReady: boolean;
-  pendingSubscribersCount?: number;
   onOpenSignIn: () => void;
-  onOpenSubscriberDashboard?: () => void;
   onRefreshStatus: () => Promise<void>;
   onResendVerification: () => Promise<void>;
 }
@@ -39,9 +36,7 @@ export const AccountStatusBanner: React.FC<AccountStatusBannerProps> = ({
   currentLang,
   user,
   authReady,
-  pendingSubscribersCount = 0,
   onOpenSignIn,
-  onOpenSubscriberDashboard,
   onRefreshStatus,
   onResendVerification,
 }) => {
@@ -154,32 +149,6 @@ export const AccountStatusBanner: React.FC<AccountStatusBannerProps> = ({
         </div>
       )}
 
-      {/* Admin Quick Console Strip */}
-      {user?.isAdmin && onOpenSubscriberDashboard && (
-        <div className="p-3.5 sm:px-5 rounded-2xl bg-gradient-to-r from-[#082F5E] to-[#0D5EAF] text-white flex flex-wrap items-center justify-between gap-3 border border-[#0D5EAF]">
-          <div className="flex items-center gap-2.5 text-xs sm:text-sm">
-            <CheckCircle2 className="w-4 h-4 text-amber-300 shrink-0" />
-            <span className="font-bold">{t.auth.adminBadge}</span>
-            {user.email && (
-              <span className="text-sky-100 hidden sm:inline">· {user.email}</span>
-            )}
-          </div>
-          <button
-            type="button"
-            onClick={onOpenSubscriberDashboard}
-            className="px-4 py-2 rounded-xl bg-white text-[#082F5E] hover:bg-sky-50 text-xs font-extrabold inline-flex items-center gap-2 transition-colors cursor-pointer whitespace-nowrap"
-          >
-            <Users className="w-4 h-4 text-[#0D5EAF]" />
-            <span>{t.auth.subscriberDashboardBtn || (isAr ? 'لوحة تحكم المشتركين' : 'Subscribers Dashboard')}</span>
-            {pendingSubscribersCount > 0 && (
-              <span className="px-1.5 py-0.5 rounded-md bg-amber-500 text-white text-[10px] font-extrabold tabular-nums">
-                {pendingSubscribersCount}
-              </span>
-            )}
-          </button>
-        </div>
-      )}
-
       {/* Non-admin Account Gate Banners */}
       {!user?.isAdmin && (!user || user.isGuest) && (
         <div className="p-4 sm:px-6 rounded-2xl bg-white dark:bg-[#0B1D36] border border-[#0D5EAF]/25 dark:border-[#163256] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -250,24 +219,34 @@ export const AccountStatusBanner: React.FC<AccountStatusBannerProps> = ({
       {!user?.isAdmin && user && !user.isGuest && user.emailVerified !== false && !user.isPremium && (
         <div
           className={`p-4 sm:px-6 rounded-2xl border space-y-3 ${
-            user.approvalStatus === 'rejected'
+            user.approvalStatus === 'rejected' || (user.searchesRemaining ?? 0) <= 0
               ? 'bg-rose-50 dark:bg-rose-950/30 border-rose-200 dark:border-rose-800'
               : 'bg-amber-50/80 dark:bg-amber-950/30 border-amber-300 dark:border-amber-800'
           }`}
         >
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="flex items-start gap-3">
-              {user.approvalStatus === 'rejected' ? (
+              {user.approvalStatus === 'rejected' || (user.searchesRemaining ?? 0) <= 0 ? (
                 <ShieldAlert className="w-5 h-5 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
               ) : (
                 <Clock className="w-5 h-5 text-amber-700 dark:text-amber-400 shrink-0 mt-0.5" />
               )}
               <div className="space-y-1">
                 <p className="text-xs sm:text-sm font-bold text-[#082F5E] dark:text-white">
-                  {user.approvalStatus === 'rejected' ? t.auth.rejectedTitle : t.auth.pendingApprovalTitle}
+                  {user.approvalStatus === 'rejected'
+                    ? t.auth.rejectedTitle
+                    : (user.searchesRemaining ?? 0) > 0
+                    ? isAr
+                      ? `تجربة مجانية: متبقي ${user.searchesRemaining} من أصل 2 تجربة مجانية`
+                      : `Free Trial Active: ${user.searchesRemaining} of 2 Free Trials Left`
+                    : t.monetization.outOfSearchesTitle}
                 </p>
                 <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
-                  {user.approvalStatus === 'rejected' ? t.auth.rejectedDesc : t.auth.pendingApprovalDesc}
+                  {user.approvalStatus === 'rejected'
+                    ? t.auth.rejectedDesc
+                    : (user.searchesRemaining ?? 0) > 0
+                    ? t.auth.pendingApprovalDesc
+                    : t.monetization.outOfSearchesDesc}
                   {user.email && <span className="font-semibold"> ({user.email})</span>}
                 </p>
               </div>

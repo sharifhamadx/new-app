@@ -2,7 +2,7 @@
   "entities": {
     "UserProfile": {
       "title": "UserProfile",
-      "description": "Authenticated user account profile, admin subscription approval state, and search quota synced across all devices.",
+      "description": "Authenticated user account profile, 2-trial allowance, admin subscription approval state (€5/mo or €50/yr), and quota synced across all devices.",
       "type": "object",
       "properties": {
         "uid": {

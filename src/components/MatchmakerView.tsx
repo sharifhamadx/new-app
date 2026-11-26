@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { apiFetch, setInMemorySessionToken } from '../utils/sessionClient';
+import { consumeOwnFreeTrialCredit } from '../firebase';
 import {
   Language,
   User,
@@ -172,6 +173,26 @@ function resultHasTargetScript(resData: MatchmakerResult | null | undefined, lan
   return true;
 }
 
+function canonicalClientPhotoKey(rawUrl?: string): string {
+  const clean = String(rawUrl || '').trim();
+  if (!clean) return '';
+  try {
+    const u = new URL(clean);
+    const host = u.hostname.toLowerCase();
+    const p = decodeURIComponent(u.pathname).toLowerCase();
+    if (host.includes('wikimedia.org') || host.includes('wikipedia.org')) {
+      const thumbMatch = p.match(/\/thumb\/([^/]+\/[^/]+\/[^/]+)\//);
+      if (thumbMatch?.[1]) return `wikimedia:${thumbMatch[1]}`;
+      const directMatch = p.match(/\/(?:commons|en|el)\/([^/]+\/[^/]+\/[^/]+)$/);
+      if (directMatch?.[1]) return `wikimedia:${directMatch[1]}`;
+      return `wikimedia-file:${(p.split('/').pop() || p).replace(/^\d+px-/, '')}`;
+    }
+    return `${host}${p}`;
+  } catch {
+    return clean.toLowerCase();
+  }
+}
+
 function formatLiveDate(lang: string): string {
   const norm = String(lang || 'en').trim().toLowerCase();
   const locale = INTL_LOCALE_MAP[norm] || norm || 'en-US';
@@ -249,6 +270,7 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
 
   const resultCacheRef = useRef<Record<string, MatchmakerResult>>({});
   const itineraryCacheRef = useRef<Record<string, TripItinerary>>({});
+  const recentShownPhotoUrlsRef = useRef<string[]>([]);
 
   const healthSignature = `${(healthProfile?.conditions || []).slice().sort().join(',')}|${(healthProfile?.allergiesOrNotes || '').trim()}`;
   const prevHealthSigRef = useRef<string>(healthSignature);
@@ -262,6 +284,14 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
 
   const { t } = useUiTranslation(currentLang);
   const todayFormatted = formatLiveDate(currentLang);
+
+  const isVerifiedAccount = Boolean(
+    user && !user.isGuest && user.emailVerified !== false && user.approvalStatus !== 'rejected'
+  );
+  const trialsRemaining = Math.max(0, Math.min(2, Number(user?.searchesRemaining ?? 0)));
+  const canUseAiSearch = Boolean(
+    isVerifiedAccount && (user?.isAdmin || user?.isPremium || trialsRemaining > 0)
+  );
 
   const fetchCityLive = async (targetCityName: string) => {
     const cleanCity = String(targetCityName || '').trim();
@@ -522,8 +552,12 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
   };
 
   const handleSearch = async () => {
-    if (!user || (!user.isAdmin && !user.isPremium)) {
-      onOpenSignIn();
+    if (!canUseAiSearch) {
+      if (!user || user.isGuest || user.emailVerified === false) {
+        onOpenSignIn();
+      } else {
+        onOpenPremium();
+      }
       return;
     }
 
@@ -556,6 +590,7 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
         prompt: optionalNotes.trim(),
         language: getLanguageEnglishName(currentLang),
         healthProfile,
+        recentPhotoUrls: recentShownPhotoUrlsRef.current.slice(-80),
       });
 
       const callRecommendApi = async () => {
@@ -619,8 +654,18 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
       }
 
       if (!response || !response.ok) {
-        if (response?.status === 403 && (data?.approvalRequired || data?.codeRequired)) {
-          onOpenSignIn();
+        if (response?.status === 403) {
+          if (data?.trialExhausted) {
+            if (user && !user.isGuest && !user.isAdmin && !user.isPremium) {
+              void consumeOwnFreeTrialCredit(user.uid, 0).catch(() => {});
+              onSyncUser({ ...user, searchesRemaining: 0 });
+            }
+            onOpenPremium();
+          } else if (data?.subscriptionRequired) {
+            onOpenPremium();
+          } else if (data?.approvalRequired || data?.codeRequired) {
+            onOpenSignIn();
+          }
         }
         const rawErr = String(data.error || '');
         const cleanErr = rawErr && !rawErr.includes('{') ? rawErr : t.matchmaker.searchFailedError;
@@ -632,11 +677,44 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
       }
       if (data?.sessionMeta?.user) {
         onSyncUser(data.sessionMeta.user);
+      } else if (
+        user &&
+        !user.isGuest &&
+        !user.isAdmin &&
+        !user.isPremium &&
+        typeof data?.trialInfo?.searchesRemaining === 'number'
+      ) {
+        const nextLeft = Math.max(0, Math.min(2, Math.floor(data.trialInfo.searchesRemaining)));
+        void consumeOwnFreeTrialCredit(user.uid, nextLeft).catch(() => {});
+        onSyncUser({ ...user, searchesRemaining: nextLeft });
       }
 
-      // Keep only verified real photos resolved by the backend (never inject static stock placeholders)
+      // Keep only verified, strictly non-repeating real photos resolved by the backend
+      const seenKeysInResult = new Set<string>();
+      const dedupeSectionPhotos = <T extends { imageUrl?: string }>(items?: T[]): T[] =>
+        Array.isArray(items)
+          ? items.map((item) => {
+              const rawImg = String(item?.imageUrl || '').trim();
+              const k = canonicalClientPhotoKey(rawImg);
+              if (!rawImg || !k || seenKeysInResult.has(k)) {
+                return { ...item, imageUrl: '' };
+              }
+              seenKeysInResult.add(k);
+              recentShownPhotoUrlsRef.current = [
+                ...recentShownPhotoUrlsRef.current.filter((u) => canonicalClientPhotoKey(u) !== k),
+                rawImg,
+              ].slice(-90);
+              return item;
+            })
+          : [];
+
       const finalResult: MatchmakerResult = {
         ...data,
+        tavernas: dedupeSectionPhotos(data.tavernas),
+        hotels: dedupeSectionPhotos(data.hotels),
+        archaeologicalSites: dedupeSectionPhotos(data.archaeologicalSites),
+        dishes: dedupeSectionPhotos(data.dishes),
+        hiddenGems: dedupeSectionPhotos(data.hiddenGems),
         guideCategory,
       };
       const normLang = String(currentLang || 'en').trim().toLowerCase();
@@ -846,13 +924,14 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
   const renderNoPhotoNotice = (
     isHotel: boolean,
     websiteUrl: string | null,
-    mapsQuery: string
+    mapsQuery: string,
+    customNote?: string
   ) => (
     <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 space-y-2.5 text-xs">
       <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
-        {isHotel ? t.matchmaker.noPhotoHotelNote : t.matchmaker.noPhotoPlaceNote}
+        {customNote || (isHotel ? t.matchmaker.noPhotoHotelNote : t.matchmaker.noPhotoPlaceNote)}
       </p>
-      <div className="flex flex-wrap items-center gap-4 pt-0.5 print:hidden">
+      <div className="flex flex-wrap items-center gap-3 pt-0.5 print:hidden">
         {websiteUrl && (
           <a
             href={websiteUrl}
@@ -869,10 +948,10 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
           href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}`}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-1.5 text-sky-700 dark:text-sky-400 font-semibold hover:underline"
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-sky-50 dark:bg-sky-950/60 border border-sky-200 dark:border-sky-800 text-sky-800 dark:text-sky-300 font-bold hover:bg-sky-100 dark:hover:bg-sky-900/60 transition-colors"
         >
           <MapPin className="w-3.5 h-3.5 shrink-0" />
-          <span>{t.matchmaker.viewPhotosOnMaps}</span>
+          <span>{t.matchmaker.googleMapsLabel}</span>
           <ExternalLink className="w-3 h-3 shrink-0" />
         </a>
       </div>
@@ -1528,20 +1607,34 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
                 </p>
               ) : (
                 <div className="flex flex-wrap items-center justify-between gap-3 w-full">
-                  <span className="text-xs sm:text-sm font-semibold text-amber-800 dark:text-amber-300">
+                  <span
+                    className={`text-xs sm:text-sm font-semibold ${
+                      user.emailVerified !== false &&
+                      user.approvalStatus !== 'rejected' &&
+                      trialsRemaining > 0
+                        ? 'text-[#082F5E] dark:text-sky-200'
+                        : 'text-amber-800 dark:text-amber-300'
+                    }`}
+                  >
                     {user.emailVerified === false
                       ? t.auth.verifyEmailTitle
                       : user.approvalStatus === 'rejected'
                       ? t.auth.rejectedTitle
-                      : t.auth.pendingApprovalTitle}
+                      : trialsRemaining > 0
+                      ? `${t.monetization.freeSearchesLeftTemplate.replace('{count}', String(trialsRemaining))} · ${t.auth.pendingApprovalTitle}`
+                      : t.monetization.outOfSearchesTitle}
                   </span>
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={onOpenSignIn}
+                      onClick={user.emailVerified === false ? onOpenSignIn : onOpenPremium}
                       className="px-3.5 py-2 bg-[#0D5EAF] hover:bg-[#0A4A8B] text-white rounded-lg text-xs font-bold whitespace-nowrap cursor-pointer"
                     >
-                      {t.auth.subscribeWhatsappBtn}
+                      {user.emailVerified === false
+                        ? t.auth.refreshStatusBtn
+                        : trialsRemaining > 0
+                        ? t.monetization.upgradeButton
+                        : t.auth.subscribeWhatsappBtn}
                     </button>
                   </div>
                 </div>
@@ -1735,62 +1828,87 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
         </div>
 
         {/* Submit Search Action */}
-        <div className="pt-1">
-          {!user || (!user.isAdmin && !user.isPremium) ? (
+        <div className="pt-1 space-y-2">
+          {!canUseAiSearch ? (
             <div className="p-4 rounded-xl bg-amber-50/90 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
               <div className="space-y-1">
                 <p className="text-xs sm:text-sm font-bold text-[#082F5E] dark:text-amber-200 flex items-center gap-1.5">
                   <Lock className="w-4 h-4 text-amber-700 dark:text-amber-400 shrink-0" />
                   <span>
-                    {user && !user.isGuest
-                      ? user.emailVerified === false
-                        ? t.auth.verifyEmailTitle
-                        : t.auth.pendingApprovalTitle
-                      : t.auth.notSignedIn}
+                    {!user || user.isGuest
+                      ? t.auth.notSignedIn
+                      : user.emailVerified === false
+                      ? t.auth.verifyEmailTitle
+                      : user.approvalStatus === 'rejected'
+                      ? t.auth.rejectedTitle
+                      : t.monetization.outOfSearchesTitle}
                   </span>
                 </p>
                 <p className="text-xs text-slate-700 dark:text-amber-200/90 leading-relaxed">
-                  {user && !user.isGuest
-                    ? t.auth.pendingApprovalDesc
-                    : t.auth.signInPrompt}
+                  {!user || user.isGuest
+                    ? t.auth.signInPrompt
+                    : user.emailVerified === false
+                    ? t.auth.verifyEmailDesc
+                    : user.approvalStatus === 'rejected'
+                    ? t.auth.rejectedDesc
+                    : t.monetization.outOfSearchesDesc}
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto shrink-0">
-                <button
-                  type="button"
-                  onClick={onOpenSignIn}
-                  className="flex-1 sm:flex-initial px-5 py-2.5 bg-[#0D5EAF] hover:bg-[#0A4A8B] text-white rounded-xl text-xs font-bold whitespace-nowrap transition-colors cursor-pointer"
-                >
-                  {user && !user.isGuest ? t.auth.subscribeWhatsappBtn : t.auth.signInWithGoogle}
-                </button>
-                <button
-                  type="button"
-                  onClick={onOpenPremium}
-                  className="px-4 py-2.5 bg-white dark:bg-[#061325] border border-amber-300 dark:border-amber-700 text-[#082F5E] dark:text-amber-200 rounded-xl text-xs font-bold whitespace-nowrap transition-colors cursor-pointer"
-                >
-                  {t.auth.vipTabLabel || 'VIP Code'}
-                </button>
+                {!user || user.isGuest || user.emailVerified === false ? (
+                  <button
+                    type="button"
+                    onClick={onOpenSignIn}
+                    className="flex-1 sm:flex-initial px-5 py-2.5 bg-[#0D5EAF] hover:bg-[#0A4A8B] text-white rounded-xl text-xs font-bold whitespace-nowrap transition-colors cursor-pointer"
+                  >
+                    {user && !user.isGuest ? t.auth.refreshStatusBtn : t.auth.signInWithGoogle}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={onOpenPremium}
+                    className="flex-1 sm:flex-initial px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold whitespace-nowrap transition-colors cursor-pointer"
+                  >
+                    {t.auth.subscribeWhatsappBtn}
+                  </button>
+                )}
               </div>
             </div>
           ) : (
-            <button
-              type="button"
-              disabled={isLoading}
-              onClick={handleSearch}
-              className="w-full py-3.5 px-6 bg-[#0D5EAF] hover:bg-[#0A4A8B] disabled:opacity-60 text-white rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer shadow-sm"
-            >
-              {isLoading ? (
-                <>
-                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  <span>{t.matchmaker.findingButton}</span>
-                </>
-              ) : (
-                <>
-                  <Search className="w-4 h-4" />
-                  <span>{t.matchmaker.findButton}</span>
-                </>
+            <>
+              <button
+                type="button"
+                disabled={isLoading}
+                onClick={handleSearch}
+                className="w-full py-3.5 px-6 bg-[#0D5EAF] hover:bg-[#0A4A8B] disabled:opacity-60 text-white rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer shadow-sm"
+              >
+                {isLoading ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span>{t.matchmaker.findingButton}</span>
+                  </>
+                ) : (
+                  <>
+                    <Search className="w-4 h-4" />
+                    <span>{t.matchmaker.findButton}</span>
+                  </>
+                )}
+              </button>
+              {user && !user.isAdmin && !user.isPremium && (
+                <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-slate-600 dark:text-slate-300">
+                  <span className="font-semibold text-[#0D5EAF] dark:text-sky-300">
+                    {t.monetization.freeSearchesLeftTemplate.replace('{count}', String(trialsRemaining))}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={onOpenPremium}
+                    className="font-bold text-[#0D5EAF] dark:text-sky-300 hover:underline cursor-pointer"
+                  >
+                    {t.monetization.upgradeButton}
+                  </button>
+                </div>
               )}
-            </button>
+            </>
           )}
         </div>
 
@@ -2699,6 +2817,8 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
                           {result.dishes.map((dish, idx) => {
                             const keyId = `dish-${dish.id}-${idx}`;
                             const rankNum = dish.rank ?? idx + 1;
+                            const hasImg = hasVerifiedImage(dish.imageUrl, keyId);
+                            const dishMapsQuery = `${dish.englishName || dish.name} ${dish.regionOfOrigin || result.tavernas?.[0]?.region || 'Greece'}`;
                             return (
                               <article
                                 key={dish.id || keyId}
@@ -2729,7 +2849,7 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
                                           region: dish.regionOfOrigin || '',
                                           description: dish.description || '',
                                           officialWebsite: '',
-                                          imageUrl: hasVerifiedImage(dish.imageUrl, keyId) ? dish.imageUrl || '' : '',
+                                          imageUrl: hasImg ? dish.imageUrl || '' : '',
                                           priceLevel: '',
                                         })}
                                         <button
@@ -2755,6 +2875,14 @@ export const MatchmakerView: React.FC<MatchmakerViewProps> = ({
                                       {dish.description}
                                     </p>
                                   </div>
+
+                                  {!hasImg &&
+                                    renderNoPhotoNotice(
+                                      false,
+                                      null,
+                                      dishMapsQuery,
+                                      t.matchmaker.noPhotoDishNote || t.matchmaker.noPhotoPlaceNote
+                                    )}
 
                                   <div className="space-y-2 pt-3 border-t border-slate-100 dark:border-slate-800 text-xs">
                                     <p className="text-slate-600 dark:text-slate-400">

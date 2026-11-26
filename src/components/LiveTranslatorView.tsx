@@ -11,6 +11,7 @@ import {
   useUiTranslation,
 } from '../hooks/useTranslatedContent';
 import { apiFetch } from '../utils/sessionClient';
+import { consumeOwnFreeTrialCredit } from '../firebase';
 import {
   Camera,
   CameraOff,
@@ -39,6 +40,8 @@ interface LiveTranslatorViewProps {
   currentLang: Language;
   user?: User | null;
   onOpenSignIn?: () => void;
+  onOpenPremium?: () => void;
+  onSyncUser?: (user: User) => void;
 }
 
 type TranslatorSubMode = 'camera' | 'voice';
@@ -165,7 +168,12 @@ async function postJsonSafe<T>(endpoint: string, bodyObj: any, fallbackMsg: stri
 
       const data = parsedJson || {};
       if (!res.ok) {
-        throw new Error(cleanApiError(data?.error, fallbackMsg));
+        const apiErr: any = new Error(cleanApiError(data?.error, fallbackMsg));
+        apiErr.status = res.status;
+        apiErr.trialExhausted = Boolean(data?.trialExhausted);
+        apiErr.approvalRequired = Boolean(data?.approvalRequired);
+        apiErr.subscriptionRequired = Boolean(data?.subscriptionRequired);
+        throw apiErr;
       }
 
       return data as T;
@@ -323,10 +331,18 @@ export const LiveTranslatorView: React.FC<LiveTranslatorViewProps> = ({
   currentLang,
   user,
   onOpenSignIn,
+  onOpenPremium,
+  onSyncUser,
 }) => {
   const { t } = useUiTranslation(currentLang);
   const tr = t.translator;
-  const hasTranslatorAccess = Boolean(user?.isAdmin || user?.isPremium);
+  const isVerifiedAccount = Boolean(
+    user && !user.isGuest && user.emailVerified !== false && user.approvalStatus !== 'rejected'
+  );
+  const trialsRemaining = Math.max(0, Math.min(2, Number(user?.searchesRemaining ?? 0)));
+  const hasTranslatorAccess = Boolean(
+    isVerifiedAccount && (user?.isAdmin || user?.isPremium || trialsRemaining > 0)
+  );
 
   const [subMode, setSubMode] = useState<TranslatorSubMode>('camera');
 
@@ -588,6 +604,14 @@ export const LiveTranslatorView: React.FC<LiveTranslatorViewProps> = ({
 
   const sendImageToVision = useCallback(
     async (imageDataUrl: string, keepLiveCamera = false) => {
+      if (!hasTranslatorAccess) {
+        if (!user || user.isGuest || user.emailVerified === false) {
+          onOpenSignIn?.();
+        } else {
+          onOpenPremium?.();
+        }
+        return;
+      }
       if (isScanningRef.current) return;
       isScanningRef.current = true;
       setIsScanning(true);
@@ -597,7 +621,11 @@ export const LiveTranslatorView: React.FC<LiveTranslatorViewProps> = ({
       }
 
       try {
-        const data = await postJsonSafe<{ result?: VisionTranslationResult; error?: string }>(
+        const data = await postJsonSafe<{
+          result?: VisionTranslationResult;
+          trialInfo?: { searchesRemaining: number };
+          error?: string;
+        }>(
           '/api/vision-translate',
           {
             imageBase64: imageDataUrl,
@@ -611,14 +639,32 @@ export const LiveTranslatorView: React.FC<LiveTranslatorViewProps> = ({
           throw new Error(data?.error || 'Could not translate the captured image.');
         }
         setVisionResult(data.result as VisionTranslationResult);
+        if (
+          user &&
+          !user.isGuest &&
+          !user.isAdmin &&
+          !user.isPremium &&
+          typeof data?.trialInfo?.searchesRemaining === 'number'
+        ) {
+          const nextLeft = Math.max(0, Math.min(2, Math.floor(data.trialInfo.searchesRemaining)));
+          void consumeOwnFreeTrialCredit(user.uid, nextLeft).catch(() => {});
+          onSyncUser?.({ ...user, searchesRemaining: nextLeft });
+        }
       } catch (err: any) {
+        if (err?.trialExhausted && user && !user.isGuest && !user.isAdmin && !user.isPremium) {
+          void consumeOwnFreeTrialCredit(user.uid, 0).catch(() => {});
+          onSyncUser?.({ ...user, searchesRemaining: 0 });
+          onOpenPremium?.();
+        } else if (err?.status === 403 && err?.subscriptionRequired) {
+          onOpenPremium?.();
+        }
         setCameraError(err?.message || 'Vision translation failed.');
       } finally {
         isScanningRef.current = false;
         setIsScanning(false);
       }
     },
-    [currentLang, visionMode]
+    [currentLang, visionMode, hasTranslatorAccess, user, onOpenSignIn, onOpenPremium, onSyncUser]
   );
 
   const captureFromVideoAndTranslate = useCallback(
@@ -689,6 +735,14 @@ export const LiveTranslatorView: React.FC<LiveTranslatorViewProps> = ({
       mimeType?: string;
       text?: string;
     }) => {
+      if (!hasTranslatorAccess) {
+        if (!user || user.isGuest || user.emailVerified === false) {
+          onOpenSignIn?.();
+        } else {
+          onOpenPremium?.();
+        }
+        return;
+      }
       setIsProcessingVoice(true);
       setVoiceError(null);
 
@@ -700,6 +754,7 @@ export const LiveTranslatorView: React.FC<LiveTranslatorViewProps> = ({
             greekPhonetic?: string;
             culturalTip?: string;
           };
+          trialInfo?: { searchesRemaining: number };
           error?: string;
         }>(
           '/api/voice-translate',
@@ -733,16 +788,35 @@ export const LiveTranslatorView: React.FC<LiveTranslatorViewProps> = ({
 
         setTurns((prev) => [newTurn, ...prev].slice(0, 40));
 
+        if (
+          user &&
+          !user.isGuest &&
+          !user.isAdmin &&
+          !user.isPremium &&
+          typeof data?.trialInfo?.searchesRemaining === 'number'
+        ) {
+          const nextLeft = Math.max(0, Math.min(2, Math.floor(data.trialInfo.searchesRemaining)));
+          void consumeOwnFreeTrialCredit(user.uid, nextLeft).catch(() => {});
+          onSyncUser?.({ ...user, searchesRemaining: nextLeft });
+        }
+
         if (autoSpeak && newTurn.translatedText) {
           await playGeminiTts(newTurn.translatedText, opts.targetCode, `${turnId}_tx`);
         }
       } catch (err: any) {
+        if (err?.trialExhausted && user && !user.isGuest && !user.isAdmin && !user.isPremium) {
+          void consumeOwnFreeTrialCredit(user.uid, 0).catch(() => {});
+          onSyncUser?.({ ...user, searchesRemaining: 0 });
+          onOpenPremium?.();
+        } else if (err?.status === 403 && err?.subscriptionRequired) {
+          onOpenPremium?.();
+        }
         setVoiceError(err?.message || 'Could not process voice translation.');
       } finally {
         setIsProcessingVoice(false);
       }
     },
-    [autoSpeak, currentLang, playGeminiTts]
+    [autoSpeak, currentLang, playGeminiTts, hasTranslatorAccess, user, onOpenSignIn, onOpenPremium, onSyncUser]
   );
 
   const stopRecording = useCallback(() => {
@@ -754,6 +828,14 @@ export const LiveTranslatorView: React.FC<LiveTranslatorViewProps> = ({
 
   const startRecording = useCallback(
     async (speaker: 'visitor' | 'local') => {
+      if (!hasTranslatorAccess) {
+        if (!user || user.isGuest || user.emailVerified === false) {
+          onOpenSignIn?.();
+        } else {
+          onOpenPremium?.();
+        }
+        return;
+      }
       if (isProcessingVoice) return;
 
       if (recordingSpeaker) {
@@ -921,6 +1003,10 @@ export const LiveTranslatorView: React.FC<LiveTranslatorViewProps> = ({
       submitVoiceTranslation,
       autoStopSilence,
       currentLang,
+      hasTranslatorAccess,
+      user,
+      onOpenSignIn,
+      onOpenPremium,
     ]
   );
 
@@ -962,29 +1048,72 @@ export const LiveTranslatorView: React.FC<LiveTranslatorViewProps> = ({
 
   return (
     <div className="space-y-8 pb-16">
-      {!hasTranslatorAccess && (
+      {!hasTranslatorAccess ? (
         <div className="p-4 sm:px-6 rounded-2xl bg-amber-50/90 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-start gap-3">
             <Lock className="w-5 h-5 text-amber-700 dark:text-amber-400 shrink-0 mt-0.5" />
             <div className="space-y-0.5">
               <p className="text-xs sm:text-sm font-bold text-[#082F5E] dark:text-white">
-                {user && !user.isGuest ? t.auth.pendingApprovalTitle : t.auth.notSignedIn}
+                {!user || user.isGuest
+                  ? t.auth.notSignedIn
+                  : user.emailVerified === false
+                  ? t.auth.verifyEmailTitle
+                  : user.approvalStatus === 'rejected'
+                  ? t.auth.rejectedTitle
+                  : t.monetization.outOfSearchesTitle}
               </p>
               <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed">
-                {user && !user.isGuest ? t.auth.pendingApprovalDesc : t.auth.signInPrompt}
+                {!user || user.isGuest
+                  ? t.auth.signInPrompt
+                  : user.emailVerified === false
+                  ? t.auth.verifyEmailDesc
+                  : user.approvalStatus === 'rejected'
+                  ? t.auth.rejectedDesc
+                  : t.monetization.outOfSearchesDesc}
               </p>
             </div>
           </div>
-          {onOpenSignIn && (
-            <button
-              type="button"
-              onClick={onOpenSignIn}
-              className="px-4 py-2 rounded-xl bg-[#0D5EAF] hover:bg-[#0A4A8B] text-white text-xs font-bold whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              {user && !user.isGuest ? t.auth.subscribeWhatsappBtn : t.auth.signInWithGoogle}
-            </button>
+          {(!user || user.isGuest || user.emailVerified === false) ? (
+            onOpenSignIn && (
+              <button
+                type="button"
+                onClick={onOpenSignIn}
+                className="px-4 py-2 rounded-xl bg-[#0D5EAF] hover:bg-[#0A4A8B] text-white text-xs font-bold whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                {user && !user.isGuest ? t.auth.refreshStatusBtn : t.auth.signInWithGoogle}
+              </button>
+            )
+          ) : (
+            (onOpenPremium || onOpenSignIn) && (
+              <button
+                type="button"
+                onClick={onOpenPremium || onOpenSignIn}
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                {t.auth.subscribeWhatsappBtn}
+              </button>
+            )
           )}
         </div>
+      ) : (
+        user &&
+        !user.isAdmin &&
+        !user.isPremium && (
+          <div className="p-3.5 sm:px-5 rounded-2xl bg-sky-50 dark:bg-[#0B1D36] border border-[#0D5EAF]/25 dark:border-[#163256] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <p className="text-xs sm:text-sm font-semibold text-[#082F5E] dark:text-sky-200">
+              {t.monetization.freeSearchesLeftTemplate.replace('{count}', String(trialsRemaining))} · {t.auth.pendingApprovalDesc}
+            </p>
+            {onOpenPremium && (
+              <button
+                type="button"
+                onClick={onOpenPremium}
+                className="px-4 py-2 rounded-xl bg-[#0D5EAF] hover:bg-[#0A4A8B] text-white text-xs font-bold whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                {t.monetization.upgradeButton}
+              </button>
+            )}
+          </div>
+        )
       )}
 
       {/* Header & Workspace Mode Switch */}

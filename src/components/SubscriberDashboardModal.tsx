@@ -50,8 +50,16 @@ export const SubscriberControlCenter: React.FC<SubscriberControlCenterProps> = (
   const [planDrafts, setPlanDrafts] = useState<Record<string, SubscriptionPlan>>({});
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
 
+  const isVerifiedAdmin = Boolean(
+    currentUser &&
+      !currentUser.isGuest &&
+      currentUser.isAdmin &&
+      currentUser.emailVerified !== false &&
+      isAdminEmail(currentUser.email)
+  );
+
   const loadSubscribers = useCallback(async () => {
-    if (!currentUser?.isAdmin) return;
+    if (!isVerifiedAdmin) return;
     setLoading(true);
     setErrorMsg(null);
     try {
@@ -95,7 +103,7 @@ export const SubscriberControlCenter: React.FC<SubscriberControlCenterProps> = (
     } finally {
       setLoading(false);
     }
-  }, [currentUser?.isAdmin, isAr, onPendingCountChange]);
+  }, [isVerifiedAdmin, isAr, onPendingCountChange]);
 
   useEffect(() => {
     void loadSubscribers();
@@ -211,6 +219,8 @@ export const SubscriberControlCenter: React.FC<SubscriberControlCenterProps> = (
     if (plan === 'monthly') return isAr ? 'شهري (€5)' : 'Monthly (€5)';
     return isAr ? 'غير محدد' : 'Free';
   };
+
+  if (!isVerifiedAdmin) return null;
 
   return (
     <div className="space-y-5">
@@ -405,6 +415,12 @@ export const SubscriberControlCenter: React.FC<SubscriberControlCenterProps> = (
                       {formatPlanLabel(sub.requestedPlan)}
                     </strong>
                   </span>
+                  <span>
+                    {isAr ? 'التجارب المتبقية:' : 'Trials Left:'}{' '}
+                    <strong className="text-[#082F5E] dark:text-slate-200">
+                      {sub.approvalStatus === 'approved' ? '∞' : `${Math.max(0, Math.min(2, sub.searchesRemaining ?? 0))}/2`}
+                    </strong>
+                  </span>
                   {sub.subscriptionExpiresAt && (
                     <span>
                       {isAr ? 'ينتهي في:' : 'Expires:'}{' '}
@@ -427,9 +443,8 @@ export const SubscriberControlCenter: React.FC<SubscriberControlCenterProps> = (
                     }
                     className="sm:col-span-3 px-2.5 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs font-semibold text-[#082F5E] dark:text-white cursor-pointer"
                   >
-                    <option value="weekly_pass">{isAr ? '7 أيام (€9.99)' : '7-Day (€9.99)'}</option>
-                    <option value="monthly">{isAr ? 'شهري (€5)' : 'Monthly (€5)'}</option>
-                    <option value="annual">{isAr ? 'سنوي (€50)' : 'Annual (€50)'}</option>
+                    <option value="monthly">{isAr ? 'شهري غير محدود (€5)' : 'Monthly Unlimited (€5)'}</option>
+                    <option value="annual">{isAr ? 'سنوي غير محدود (€50)' : 'Annual Unlimited (€50)'}</option>
                   </select>
 
                   <input
@@ -506,7 +521,14 @@ export const SubscriberDashboardModal: React.FC<SubscriberDashboardModalProps> =
   currentUser,
   onPendingCountChange,
 }) => {
-  if (!isOpen) return null;
+  const isVerifiedAdmin = Boolean(
+    currentUser &&
+      !currentUser.isGuest &&
+      currentUser.isAdmin &&
+      currentUser.emailVerified !== false &&
+      isAdminEmail(currentUser.email)
+  );
+  if (!isOpen || !isVerifiedAdmin) return null;
 
   return (
     <div

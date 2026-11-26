@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Language, User, ActiveTab, Theme, HealthProfile } from '../types';
+import { isAdminEmail } from '../firebase';
 import {
   SUPPORTED_LANGUAGES,
   getLanguageShortLabel,
@@ -23,8 +24,9 @@ import {
   HeartPulse,
   Users,
   MailCheck,
-  KeyRound,
   LogIn,
+  ArrowLeft,
+  ArrowRight,
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -33,13 +35,14 @@ interface NavbarProps {
   user: User | null;
   authReady: boolean;
   onOpenSignIn: () => void;
-  onOpenVipCode?: () => void;
   onSignOut: () => void;
   onOpenPremium: () => void;
   onOpenSubscriberDashboard?: () => void;
   pendingSubscribersCount?: number;
   activeTab: ActiveTab;
   onTabChange: (tab: ActiveTab) => void;
+  canGoBack?: boolean;
+  onGoBack?: () => void;
   theme: Theme;
   onToggleTheme: () => void;
   favoritesCount?: number;
@@ -53,13 +56,14 @@ export const Navbar: React.FC<NavbarProps> = ({
   user,
   authReady,
   onOpenSignIn,
-  onOpenVipCode,
   onSignOut,
   onOpenPremium,
   onOpenSubscriberDashboard,
   pendingSubscribersCount = 0,
   activeTab,
   onTabChange,
+  canGoBack = false,
+  onGoBack,
   theme,
   onToggleTheme,
   favoritesCount = 0,
@@ -72,6 +76,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [customLangInput, setCustomLangInput] = useState('');
   const { t, isTranslatingUi } = useUiTranslation(currentLang);
   const isAr = String(currentLang || '').toLowerCase().startsWith('ar');
+  const BackArrow = isAr ? ArrowRight : ArrowLeft;
 
   const primaryNavItems: { id: ActiveTab; label: string }[] = [
     { id: 'matchmaker', label: t.nav.matchmaker },
@@ -108,11 +113,15 @@ export const Navbar: React.FC<NavbarProps> = ({
     setLangMenuOpen(false);
   };
 
-  const isSignedInAccount = Boolean(user && (!user.isGuest || user.isPremium || user.isAdmin));
-  const statusShortLabel = user?.isAdmin
+  const isVerifiedAdmin = Boolean(
+    user && !user.isGuest && user.isAdmin && user.emailVerified !== false && isAdminEmail(user.email)
+  );
+  const isSignedInAccount = Boolean(user && (!user.isGuest || user.isPremium || isVerifiedAdmin));
+  const trialsLeft = Math.max(0, Math.min(2, Number(user?.searchesRemaining ?? 0)));
+  const statusShortLabel = isVerifiedAdmin
     ? t.monetization.unlimitedValue || '∞'
     : user?.isPremium
-    ? t.auth.approvedStatusLabel || (isAr ? 'مفعّل' : 'Active')
+    ? t.auth.approvedStatusLabel || (isAr ? 'مفعّل ∞' : 'Active ∞')
     : user && !user.isGuest
     ? user.emailVerified === false
       ? isAr
@@ -120,13 +129,19 @@ export const Navbar: React.FC<NavbarProps> = ({
         : 'Verify Email'
       : user.approvalStatus === 'rejected'
       ? t.auth.rejectedStatusLabel || (isAr ? 'موقوف' : 'Suspended')
-      : t.auth.pendingStatusLabel || (isAr ? 'بانتظار الموافقة' : 'Pending')
+      : trialsLeft > 0
+      ? isAr
+        ? `تجربة (${trialsLeft}/2)`
+        : `Trial (${trialsLeft}/2)`
+      : isAr
+      ? 'انتهى التجريب'
+      : 'Trial Ended'
     : isAr
     ? 'زائر'
     : 'Guest';
 
-  const accountDisplayTitle = user?.isAdmin
-    ? user.name || t.monetization.adminRoleLabel
+  const accountDisplayTitle = isVerifiedAdmin
+    ? user?.name || t.monetization.adminRoleLabel
     : user?.isPremium
     ? user.name || t.monetization.vipUnlimitedLabel
     : user && !user.isGuest
@@ -246,20 +261,16 @@ export const Navbar: React.FC<NavbarProps> = ({
               )}
             </div>
 
-            {/* Admin Quick Subscribers Dashboard Button */}
-            {authReady && user?.isAdmin && onOpenSubscriberDashboard && (
+            {/* Back to Previous Tab button */}
+            {canGoBack && onGoBack && (
               <button
                 type="button"
-                onClick={onOpenSubscriberDashboard}
-                className="hidden md:inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#082F5E] hover:bg-[#0D5EAF] text-white rounded-lg text-xs font-bold whitespace-nowrap shrink-0 transition-colors cursor-pointer"
+                onClick={onGoBack}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-[#163256] bg-[#F7FAFE] dark:bg-[#0B1D36] hover:bg-sky-50 dark:hover:bg-[#082F5E] text-xs font-bold text-[#082F5E] dark:text-sky-200 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                title={isAr ? 'رجوع للسابق' : 'Back'}
               >
-                <Users className="w-3.5 h-3.5 text-amber-300" />
-                <span>{t.auth.subscriberDashboardBtn || (isAr ? 'المشتركين' : 'Subscribers')}</span>
-                {pendingSubscribersCount > 0 && (
-                  <span className="px-1.5 py-0.5 rounded bg-amber-500 text-white text-[10px] font-extrabold tabular-nums">
-                    {pendingSubscribersCount}
-                  </span>
-                )}
+                <BackArrow className="w-3.5 h-3.5 text-[#0D5EAF] dark:text-sky-400" />
+                <span className="hidden sm:inline">{isAr ? 'رجوع' : 'Back'}</span>
               </button>
             )}
 
@@ -275,7 +286,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 >
                   <div
                     className={`w-7 h-7 rounded-full text-white flex items-center justify-center shrink-0 ${
-                      user.isAdmin
+                      isVerifiedAdmin
                         ? 'bg-emerald-700'
                         : user.isPremium
                         ? 'bg-[#0D5EAF]'
@@ -284,7 +295,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                         : 'bg-amber-600'
                     }`}
                   >
-                    {user.isAdmin ? (
+                    {isVerifiedAdmin ? (
                       <Shield className="w-3.5 h-3.5" />
                     ) : user.isPremium ? (
                       <Crown className="w-3.5 h-3.5 text-amber-300" />
@@ -294,13 +305,13 @@ export const Navbar: React.FC<NavbarProps> = ({
                       <Clock className="w-3.5 h-3.5" />
                     )}
                   </div>
-                  <div className="text-start hidden sm:block">
-                    <p className="text-xs font-semibold text-[#082F5E] dark:text-white leading-tight truncate max-w-[130px]">
+                  <div className="text-start hidden md:block">
+                    <p className="text-xs font-semibold text-[#082F5E] dark:text-white leading-tight truncate max-w-[120px]">
                       {accountDisplayTitle}
                     </p>
                     <p
                       className={`text-[11px] font-semibold leading-tight ${
-                        user.isAdmin || user.isPremium
+                        isVerifiedAdmin || user.isPremium
                           ? 'text-emerald-700 dark:text-emerald-400'
                           : user.approvalStatus === 'rejected'
                           ? 'text-rose-600 dark:text-rose-400'
@@ -310,6 +321,17 @@ export const Navbar: React.FC<NavbarProps> = ({
                       {statusShortLabel}
                     </p>
                   </div>
+                </button>
+
+                {/* Always-Visible Sign Out Button */}
+                <button
+                  type="button"
+                  onClick={onSignOut}
+                  className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg bg-rose-50 dark:bg-rose-950/50 hover:bg-rose-100 dark:hover:bg-rose-900/60 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs font-bold whitespace-nowrap shrink-0 transition-colors cursor-pointer"
+                  title={t.auth.signOut}
+                >
+                  <LogOut className="w-3.5 h-3.5 shrink-0" />
+                  <span>{t.auth.signOut}</span>
                 </button>
 
                 {userMenuOpen && (
@@ -335,7 +357,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                           {t.monetization.currentPlan}
                         </span>
                         <span className="font-bold text-[#082F5E] dark:text-white flex items-center gap-1">
-                          {user.isAdmin ? (
+                          {isVerifiedAdmin ? (
                             <>
                               <Shield className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                               <span>{t.monetization.adminRoleLabel}</span>
@@ -351,7 +373,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                         </span>
                       </div>
 
-                      {user.isAdmin && onOpenSubscriberDashboard && (
+                      {isVerifiedAdmin && onOpenSubscriberDashboard && (
                         <button
                           type="button"
                           onClick={() => {
@@ -374,7 +396,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                         </button>
                       )}
 
-                      {!user.isAdmin && !user.isPremium && (
+                      {!isVerifiedAdmin && !user.isPremium && (
                         <div className="space-y-1.5 pt-1">
                           <button
                             type="button"
@@ -386,18 +408,6 @@ export const Navbar: React.FC<NavbarProps> = ({
                           >
                             <Crown className="w-3.5 h-3.5 shrink-0 text-amber-300" />
                             <span className="truncate">{t.monetization.upgradeButton}</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setUserMenuOpen(false);
-                              if (onOpenVipCode) onOpenVipCode();
-                              else onOpenSignIn();
-                            }}
-                            className="w-full py-2 px-3 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-[#082F5E] dark:text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                          >
-                            <KeyRound className="w-3.5 h-3.5 shrink-0" />
-                            <span>{t.auth.enterActivationCode}</span>
                           </button>
                         </div>
                       )}

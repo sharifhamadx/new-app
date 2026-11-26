@@ -29,6 +29,8 @@ import {
   AlertCircle,
   Loader2,
   Search,
+  MapPin,
+  ExternalLink,
 } from 'lucide-react';
 
 interface DailyPicksSpotlightProps {
@@ -273,6 +275,37 @@ export const DailyPicksSpotlight: React.FC<DailyPicksSpotlightProps> = ({
   if (!dailyPicks) return null;
 
   const { culinaryPick, dishPick, hotelPick, tripPick } = dailyPicks;
+  const canonicalDailyKey = (rawUrl?: string | null) => {
+    const raw = (rawUrl || '').trim();
+    if (!raw) return '';
+    try {
+      const u = new URL(raw);
+      if (u.hostname.includes('wikimedia.org') || u.hostname.includes('wikipedia.org')) {
+        const m = u.pathname.match(/\/thumb\/[^/]+\/[^/]+\/([^/]+)\/\d+px-/i);
+        if (m && m[1]) return `wikimedia:${decodeURIComponent(m[1]).toLowerCase()}`;
+        const last = u.pathname.split('/').pop() || u.pathname;
+        return `wikimedia:${decodeURIComponent(last).toLowerCase()}`;
+      }
+      u.hash = '';
+      ['w', 'width', 'h', 'height', 'q', 'quality', 'fit', 'auto', 'dpr'].forEach((k) =>
+        u.searchParams.delete(k)
+      );
+      return u.toString().toLowerCase();
+    } catch {
+      return raw.toLowerCase();
+    }
+  };
+  const seenDailyPhotoKeys = new Set<string>();
+  const uniqueDailyImg = (url?: string) => {
+    const key = canonicalDailyKey(url);
+    if (!key || seenDailyPhotoKeys.has(key)) return '';
+    seenDailyPhotoKeys.add(key);
+    return url || '';
+  };
+  const uniqueCulinaryImg = uniqueDailyImg(culinaryPick?.imageUrl);
+  const uniqueDishImg = uniqueDailyImg(dishPick?.imageUrl);
+  const uniqueHotelImg = uniqueDailyImg(hotelPick?.imageUrl);
+  const uniqueTripImg = uniqueDailyImg(tripPick?.imageUrl);
   const actionLabels = {
     googleMapsLabel: t.matchmaker.googleMapsLabel,
     previewAndBookSite: t.matchmaker.previewAndBookSite,
@@ -283,15 +316,31 @@ export const DailyPicksSpotlight: React.FC<DailyPicksSpotlightProps> = ({
     bookTicketsAndTours: t.matchmaker.bookTicketsAndTours,
   };
 
+  const renderDailyNoPhotoNotice = (mapsQuery: string, note: string) => (
+    <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 space-y-2 text-xs">
+      <p className="text-slate-600 dark:text-slate-300 leading-relaxed">{note}</p>
+      <a
+        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-sky-50 dark:bg-sky-950/60 border border-sky-200 dark:border-sky-800 text-sky-800 dark:text-sky-300 font-bold hover:bg-sky-100 dark:hover:bg-sky-900/60 transition-colors"
+      >
+        <MapPin className="w-3.5 h-3.5 shrink-0" />
+        <span>{t.matchmaker.googleMapsLabel}</span>
+        <ExternalLink className="w-3 h-3 shrink-0" />
+      </a>
+    </div>
+  );
+
   const renderCulinaryCard = () => {
     const imgKey = `daily-culinary-${dailyPicks.dateKey}`;
-    const hasImg = Boolean(culinaryPick.imageUrl && !failedImages[imgKey]);
+    const hasImg = Boolean(uniqueCulinaryImg && !failedImages[imgKey]);
     return (
       <article className="bg-white dark:bg-slate-900 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 flex flex-col justify-between">
         {hasImg && (
           <div className="h-48 bg-slate-100 dark:bg-slate-800 relative">
             <img
-              src={culinaryPick.imageUrl}
+              src={uniqueCulinaryImg}
               alt={culinaryPick.name}
               referrerPolicy="no-referrer"
               onError={() => setFailedImages((p) => ({ ...p, [imgKey]: true }))}
@@ -319,7 +368,7 @@ export const DailyPicksSpotlight: React.FC<DailyPicksSpotlightProps> = ({
                   region: culinaryPick.region || culinaryPick.location || '',
                   description: culinaryPick.description || '',
                   officialWebsite: culinaryPick.officialWebsite || '',
-                  imageUrl: hasImg ? culinaryPick.imageUrl || '' : '',
+                  imageUrl: hasImg ? uniqueCulinaryImg : '',
                   priceLevel: culinaryPick.priceLevel || '€€',
                 })}
               </div>
@@ -380,6 +429,11 @@ export const DailyPicksSpotlight: React.FC<DailyPicksSpotlightProps> = ({
           </div>
 
           <div className="space-y-2.5 pt-3 border-t border-slate-100 dark:border-slate-800 text-xs">
+            {!hasImg &&
+              renderDailyNoPhotoNotice(
+                `${culinaryPick.englishName || culinaryPick.name} ${culinaryPick.location || culinaryPick.region || 'Greece'}`,
+                t.matchmaker.noPhotoPlaceNote
+              )}
             <div className="flex items-center justify-between gap-2 text-slate-500 dark:text-slate-400">
               <span className="font-semibold text-slate-800 dark:text-slate-200">
                 {t.matchmaker.price}: {culinaryPick.priceLevel}
@@ -409,13 +463,13 @@ export const DailyPicksSpotlight: React.FC<DailyPicksSpotlightProps> = ({
 
   const renderDishCard = () => {
     const imgKey = `daily-dish-${dailyPicks.dateKey}`;
-    const hasImg = Boolean(dishPick.imageUrl && !failedImages[imgKey]);
+    const hasImg = Boolean(uniqueDishImg && !failedImages[imgKey]);
     return (
       <article className="bg-white dark:bg-slate-900 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 flex flex-col justify-between">
         {hasImg && (
           <div className="h-52 bg-slate-100 dark:bg-slate-800">
             <img
-              src={dishPick.imageUrl}
+              src={uniqueDishImg}
               alt={dishPick.name}
               referrerPolicy="no-referrer"
               onError={() => setFailedImages((p) => ({ ...p, [imgKey]: true }))}
@@ -439,7 +493,7 @@ export const DailyPicksSpotlight: React.FC<DailyPicksSpotlightProps> = ({
                   region: dishPick.regionOfOrigin || '',
                   description: dishPick.description || '',
                   officialWebsite: '',
-                  imageUrl: hasImg ? dishPick.imageUrl || '' : '',
+                  imageUrl: hasImg ? uniqueDishImg : '',
                   priceLevel: '',
                 })}
                 <button
@@ -480,6 +534,11 @@ export const DailyPicksSpotlight: React.FC<DailyPicksSpotlightProps> = ({
           </div>
 
           <div className="space-y-2 pt-3 border-t border-slate-100 dark:border-slate-800 text-xs">
+            {!hasImg &&
+              renderDailyNoPhotoNotice(
+                `${dishPick.englishName || dishPick.name} ${dishPick.regionOfOrigin || 'Greece'}`,
+                t.matchmaker.noPhotoDishNote || t.matchmaker.noPhotoPlaceNote
+              )}
             <p className="text-slate-600 dark:text-slate-400">
               <strong className="text-slate-800 dark:text-slate-200">
                 {t.matchmaker.ingredients}:
@@ -498,13 +557,13 @@ export const DailyPicksSpotlight: React.FC<DailyPicksSpotlightProps> = ({
 
   const renderHotelCard = () => {
     const imgKey = `daily-hotel-${dailyPicks.dateKey}`;
-    const hasImg = Boolean(hotelPick.imageUrl && !failedImages[imgKey]);
+    const hasImg = Boolean(uniqueHotelImg && !failedImages[imgKey]);
     return (
       <article className="bg-white dark:bg-slate-900 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 flex flex-col justify-between">
         {hasImg && (
           <div className="h-48 bg-slate-100 dark:bg-slate-800">
             <img
-              src={hotelPick.imageUrl}
+              src={uniqueHotelImg}
               alt={hotelPick.name}
               referrerPolicy="no-referrer"
               onError={() => setFailedImages((p) => ({ ...p, [imgKey]: true }))}
@@ -532,7 +591,7 @@ export const DailyPicksSpotlight: React.FC<DailyPicksSpotlightProps> = ({
                   region: hotelPick.region || hotelPick.location || '',
                   description: hotelPick.description || '',
                   officialWebsite: hotelPick.officialWebsite || '',
-                  imageUrl: hasImg ? hotelPick.imageUrl || '' : '',
+                  imageUrl: hasImg ? uniqueHotelImg : '',
                   priceLevel: hotelPick.priceLevel || '€€',
                 })}
               </div>
@@ -574,6 +633,11 @@ export const DailyPicksSpotlight: React.FC<DailyPicksSpotlightProps> = ({
           </div>
 
           <div className="space-y-2.5 pt-3 border-t border-slate-100 dark:border-slate-800 text-xs">
+            {!hasImg &&
+              renderDailyNoPhotoNotice(
+                `${hotelPick.englishName || hotelPick.name} ${hotelPick.location || hotelPick.region || 'Greece'}`,
+                t.matchmaker.noPhotoHotelNote
+              )}
             <div className="flex items-center justify-between gap-2 text-slate-500 dark:text-slate-400">
               <span className="font-semibold text-slate-800 dark:text-slate-200">
                 {t.matchmaker.price}: {hotelPick.priceLevel}
@@ -600,13 +664,13 @@ export const DailyPicksSpotlight: React.FC<DailyPicksSpotlightProps> = ({
 
   const renderTripCard = () => {
     const imgKey = `daily-trip-${dailyPicks.dateKey}`;
-    const hasImg = Boolean(tripPick.imageUrl && !failedImages[imgKey]);
+    const hasImg = Boolean(uniqueTripImg && !failedImages[imgKey]);
     return (
       <article className="bg-white dark:bg-slate-900 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 flex flex-col justify-between">
         {hasImg && (
           <div className="h-48 bg-slate-100 dark:bg-slate-800">
             <img
-              src={tripPick.imageUrl}
+              src={uniqueTripImg}
               alt={tripPick.title}
               referrerPolicy="no-referrer"
               onError={() => setFailedImages((p) => ({ ...p, [imgKey]: true }))}
@@ -629,7 +693,7 @@ export const DailyPicksSpotlight: React.FC<DailyPicksSpotlightProps> = ({
                 region: tripPick.tripCity || tripPick.region || '',
                 description: tripPick.description || '',
                 officialWebsite: tripPick.officialWebsite || '',
-                imageUrl: hasImg ? tripPick.imageUrl || '' : '',
+                imageUrl: hasImg ? uniqueTripImg : '',
                 priceLevel: '',
               })}
             </div>
@@ -661,6 +725,11 @@ export const DailyPicksSpotlight: React.FC<DailyPicksSpotlightProps> = ({
           </div>
 
           <div className="space-y-2.5 pt-3 border-t border-slate-100 dark:border-slate-800 text-xs">
+            {!hasImg &&
+              renderDailyNoPhotoNotice(
+                `${tripPick.englishName || tripPick.title} ${tripPick.tripCity || tripPick.region || 'Greece'}`,
+                t.matchmaker.noPhotoPlaceNote
+              )}
             <div className="flex flex-wrap items-center justify-between gap-2 text-slate-600 dark:text-slate-300">
               <span className="inline-flex items-center gap-1">
                 <Clock className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400 shrink-0" />

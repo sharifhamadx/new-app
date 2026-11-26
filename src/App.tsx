@@ -28,6 +28,7 @@ import {
   warmUpBackendIfNative,
 } from './utils/sessionClient';
 import { Navbar } from './components/Navbar';
+import { AuthGateScreen } from './components/AuthGateScreen';
 import { AccountStatusBanner } from './components/AccountStatusBanner';
 import { SubscriberDashboardModal } from './components/SubscriberDashboardModal';
 import { MatchmakerView } from './components/MatchmakerView';
@@ -46,6 +47,7 @@ import { OfflineIndicator } from './components/PWAInstallBanner';
 import { FloatingWhatsAppButton } from './components/FloatingWhatsAppButton';
 import { HealthProfileModal } from './components/HealthProfileModal';
 import { isRtlLanguage, useUiTranslation } from './hooks/useTranslatedContent';
+import { ArrowLeft, ArrowRight } from 'lucide-react';
 
 const FAVORITES_STORAGE_KEY = 'aegea_favorites_v2';
 const HEALTH_PROFILE_STORAGE_KEY = 'aegea_health_profile_v1';
@@ -118,6 +120,7 @@ export default function App() {
   });
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('matchmaker');
+  const [tabHistory, setTabHistory] = useState<ActiveTab[]>([]);
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [adminSetupRequired, setAdminSetupRequired] = useState(false);
@@ -127,7 +130,6 @@ export default function App() {
   const [healthProfile, setHealthProfile] = useState<HealthProfile>(() => loadStoredHealthProfile());
 
   const [isSignInOpen, setIsSignInOpen] = useState(false);
-  const [signInInitialTab, setSignInInitialTab] = useState<'account' | 'vip' | 'admin'>('account');
   const [isSubscriberDashboardOpen, setIsSubscriberDashboardOpen] = useState(false);
   const [isTermsOpen, setIsTermsOpen] = useState(false);
   const [isPremiumOpen, setIsPremiumOpen] = useState(false);
@@ -255,10 +257,11 @@ export default function App() {
             );
           }
 
-          if (synced.isAdmin) {
+          if (synced.isAdmin && fbUser.emailVerified && isAdminEmail(fbUser.email)) {
             void refreshPendingSubscribersCount();
           } else {
             setPendingSubscribersCount(0);
+            setIsSubscriberDashboardOpen(false);
           }
 
           // Also fetch adminSetupRequired status & server health profile safely in background
@@ -298,16 +301,14 @@ export default function App() {
         return;
       }
 
-      // No Firebase user signed in — check if VIP Activation Code or Admin Passcode HMAC session exists
+      // No Firebase Google/Email user signed in -> MUST require mandatory Google/Email sign-in (never auto-promote Admin or bypass login)
       try {
         const session = await fetchSessionState();
         if (!cancelled) {
           setAdminSetupRequired(session.adminSetupRequired);
-          if (session.user?.isAdmin || session.user?.isPremium) {
-            setUser(session.user);
-          } else {
-            setUser(GUEST_USER);
-          }
+          setPendingSubscribersCount(0);
+          setIsSubscriberDashboardOpen(false);
+          setUser(GUEST_USER);
           const srvHealth = session.user?.healthProfile;
           if (srvHealth && (srvHealth.conditions.length > 0 || srvHealth.allergiesOrNotes)) {
             setHealthProfile(srvHealth);
@@ -320,6 +321,8 @@ export default function App() {
         }
       } catch {
         if (!cancelled) {
+          setPendingSubscribersCount(0);
+          setIsSubscriberDashboardOpen(false);
           setUser(GUEST_USER);
         }
       } finally {
@@ -341,13 +344,26 @@ export default function App() {
 
   const handleSessionUpdated = useCallback(
     (nextUser: User, nextAdminSetup: boolean) => {
-      setUser(nextUser);
       setAdminSetupRequired(nextAdminSetup);
-      if (nextUser.isAdmin) {
-        void refreshPendingSubscribersCount();
-      }
+      setUser((prev) => {
+        if (prev && !prev.isGuest && prev.email) {
+          return {
+            ...prev,
+            isPremium: nextUser.isPremium || prev.isPremium,
+            subscriptionPlan: nextUser.subscriptionPlan || prev.subscriptionPlan,
+            planExpiresAt: nextUser.planExpiresAt || prev.planExpiresAt,
+            codeHint: nextUser.codeHint || prev.codeHint,
+            searchesRemaining: nextUser.isPremium
+              ? 999999
+              : typeof nextUser.searchesRemaining === 'number'
+              ? nextUser.searchesRemaining
+              : prev.searchesRemaining,
+          };
+        }
+        return nextUser;
+      });
     },
-    [refreshPendingSubscribersCount]
+    []
   );
 
   const handleSaveHealthProfile = useCallback((nextProfile: HealthProfile, updatedUser?: User) => {
@@ -395,6 +411,8 @@ export default function App() {
     await Promise.allSettled([firebaseSignOut(), signOutSession()]);
     setPendingSubscribersCount(0);
     setIsSubscriberDashboardOpen(false);
+    setTabHistory([]);
+    setActiveTab('matchmaker');
     setUser(GUEST_USER);
   };
 
@@ -402,18 +420,33 @@ export default function App() {
     setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
   };
 
+  const handleTabChange = useCallback(
+    (nextTab: ActiveTab) => {
+      if (nextTab === activeTab) return;
+      setTabHistory((prev) => [...prev.slice(-19), activeTab]);
+      setActiveTab(nextTab);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    },
+    [activeTab]
+  );
+
+  const handleGoBack = useCallback(() => {
+    setTabHistory((prev) => {
+      if (prev.length === 0) {
+        setActiveTab('matchmaker');
+        return [];
+      }
+      const next = [...prev];
+      const previousTab = next.pop() || 'matchmaker';
+      setActiveTab(previousTab);
+      return next;
+    });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, []);
+
+  const canGoBack = tabHistory.length > 0 || activeTab !== 'matchmaker';
+
   const handleOpenAccountModal = () => {
-    setSignInInitialTab('account');
-    setIsSignInOpen(true);
-  };
-
-  const handleOpenVipModal = () => {
-    setSignInInitialTab('vip');
-    setIsSignInOpen(true);
-  };
-
-  const handleOpenAdminModal = () => {
-    setSignInInitialTab('admin');
     setIsSignInOpen(true);
   };
 
@@ -449,6 +482,53 @@ export default function App() {
     setFavorites((prev) => prev.filter((f) => f.id !== favId));
   }, []);
 
+  const isUnauthenticated = !user || user.isGuest || user.emailVerified === false;
+
+  if (!authReady) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-[#F7FAFE] dark:bg-[#061325] text-[#082F5E] dark:text-white gap-3">
+        <div className="w-10 h-10 rounded-full border-3 border-[#0D5EAF]/25 border-t-[#0D5EAF] animate-spin" />
+        <p className="text-xs font-bold tracking-wider uppercase text-[#0D5EAF] dark:text-sky-300">
+          AEGEA · Smart Greece Guide
+        </p>
+      </div>
+    );
+  }
+
+  if (isUnauthenticated) {
+    return (
+      <>
+        <AuthGateScreen
+          currentLang={currentLang}
+          onLanguageChange={setCurrentLang}
+          theme={theme}
+          onToggleTheme={handleToggleTheme}
+          pendingVerificationUser={user && !user.isGuest && user.emailVerified === false ? user : null}
+          onAuthenticated={(synced) => {
+            setUser(synced);
+            if (synced.isAdmin && synced.emailVerified !== false && isAdminEmail(synced.email)) {
+              void refreshPendingSubscribersCount();
+            }
+          }}
+          onOpenTerms={() => setIsTermsOpen(true)}
+          onSignedOutReset={() => {
+            setPendingSubscribersCount(0);
+            setIsSubscriberDashboardOpen(false);
+            setUser(GUEST_USER);
+          }}
+        />
+        <TermsModal
+          isOpen={isTermsOpen}
+          onClose={() => setIsTermsOpen(false)}
+          currentLang={currentLang}
+        />
+      </>
+    );
+  }
+
+  const isAr = String(currentLang || '').toLowerCase().startsWith('ar');
+  const BackArrow = isAr ? ArrowRight : ArrowLeft;
+
   return (
     <div className="min-h-screen flex flex-col bg-[#F7FAFE] dark:bg-[#061325] text-[#082F5E] dark:text-slate-100 selection:bg-[#0D5EAF] selection:text-white transition-colors duration-200">
       <Navbar
@@ -457,13 +537,14 @@ export default function App() {
         user={user}
         authReady={authReady}
         onOpenSignIn={handleOpenAccountModal}
-        onOpenVipCode={handleOpenVipModal}
         onSignOut={handleSignOut}
         onOpenPremium={() => setIsPremiumOpen(true)}
         onOpenSubscriberDashboard={() => setIsSubscriberDashboardOpen(true)}
         pendingSubscribersCount={pendingSubscribersCount}
         activeTab={activeTab}
-        onTabChange={setActiveTab}
+        onTabChange={handleTabChange}
+        canGoBack={canGoBack}
+        onGoBack={handleGoBack}
         theme={theme}
         onToggleTheme={handleToggleTheme}
         favoritesCount={favorites.length}
@@ -475,14 +556,25 @@ export default function App() {
         currentLang={currentLang}
         user={user}
         authReady={authReady}
-        pendingSubscribersCount={pendingSubscribersCount}
         onOpenSignIn={handleOpenAccountModal}
-        onOpenSubscriberDashboard={() => setIsSubscriberDashboardOpen(true)}
         onRefreshStatus={handleRefreshAccountStatus}
         onResendVerification={handleResendVerification}
       />
 
       <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 sm:pt-8 w-full">
+        {canGoBack && (
+          <div className="mb-4 flex items-center justify-between">
+            <button
+              type="button"
+              onClick={handleGoBack}
+              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white dark:bg-[#0B1D36] hover:bg-sky-50 dark:hover:bg-[#082F5E] border border-slate-200 dark:border-[#163256] text-xs font-bold text-[#082F5E] dark:text-sky-200 shadow-xs transition-colors cursor-pointer"
+            >
+              <BackArrow className="w-3.5 h-3.5 text-[#0D5EAF] dark:text-sky-400" />
+              <span>{isAr ? 'رجوع للسابق' : 'Back to Previous'}</span>
+            </button>
+          </div>
+        )}
+
         {activeTab === 'matchmaker' && (
           <MatchmakerView
             currentLang={currentLang}
@@ -491,14 +583,8 @@ export default function App() {
             onToggleFavorite={handleToggleFavorite}
             onOpenSignIn={handleOpenAccountModal}
             onOpenPremium={() => setIsPremiumOpen(true)}
-            onOpenPartner={() => {
-              setActiveTab('about');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-            onOpenTranslator={() => {
-              setActiveTab('translator');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
+            onOpenPartner={() => handleTabChange('about')}
+            onOpenTranslator={() => handleTabChange('translator')}
             onSyncUser={(updatedUser) => setUser(updatedUser)}
             healthProfile={healthProfile}
             onOpenHealthSettings={() => setIsHealthOpen(true)}
@@ -510,6 +596,8 @@ export default function App() {
             currentLang={currentLang}
             user={user}
             onOpenSignIn={handleOpenAccountModal}
+            onOpenPremium={() => setIsPremiumOpen(true)}
+            onSyncUser={(updatedUser) => setUser(updatedUser)}
           />
         )}
 
@@ -550,18 +638,11 @@ export default function App() {
             favorites={favorites}
             onRemoveFavorite={handleRemoveFavorite}
             onOpenSignIn={handleOpenAccountModal}
-            onGoToMatchmaker={() => setActiveTab('matchmaker')}
+            onGoToMatchmaker={() => handleTabChange('matchmaker')}
           />
         )}
 
-        {activeTab === 'about' && (
-          <AboutDeveloperView
-            currentLang={currentLang}
-            user={user}
-            onOpenAdminLogin={handleOpenAdminModal}
-            onPendingCountChange={setPendingSubscribersCount}
-          />
-        )}
+        {activeTab === 'about' && <AboutDeveloperView currentLang={currentLang} />}
 
         {activeTab === 'terms' && <TermsView currentLang={currentLang} />}
       </main>
@@ -569,7 +650,7 @@ export default function App() {
       <Footer
         currentLang={currentLang}
         onLanguageChange={setCurrentLang}
-        onTabChange={setActiveTab}
+        onTabChange={handleTabChange}
       />
 
       <FloatingWhatsAppButton currentLang={currentLang} />
@@ -581,7 +662,6 @@ export default function App() {
         onClose={() => setIsSignInOpen(false)}
         onOpenTerms={() => setIsTermsOpen(true)}
         currentLang={currentLang}
-        initialTab={signInInitialTab}
         adminSetupRequired={adminSetupRequired}
         onSessionUpdated={handleSessionUpdated}
       />
@@ -605,7 +685,6 @@ export default function App() {
         onClose={() => setIsPremiumOpen(false)}
         user={user}
         onSessionUpdated={handleSessionUpdated}
-        onOpenTerms={() => setIsTermsOpen(true)}
         currentLang={currentLang}
       />
 

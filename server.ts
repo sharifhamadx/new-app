@@ -77,19 +77,80 @@ try {
 
 const ADMIN_EMAIL_SET = new Set([
   'sharifhamadx122@gmail.com',
-  'sharifhamadmoko@gmail.com',
 ]);
 
-// Generic hospitality/geography stopwords ignored when verifying Wikipedia/Commons photo matches
+// Generic hospitality/grammatical stopwords ignored when verifying Wikipedia/Commons photo matches
 const GENERIC_PLACE_TOKENS = new Set([
   'hotel', 'hotels', 'palace', 'resort', 'suites', 'suite', 'villa', 'villas', 'boutique', 'spa',
   'taverna', 'tavern', 'restaurant', 'bistro', 'cafe', 'bar', 'grill', 'kitchen', 'house', 'club',
   'ancient', 'archaeological', 'site', 'ruins', 'temple', 'museum', 'church', 'monastery', 'castle',
   'fortress', 'square', 'beach', 'bay', 'cove', 'island', 'village', 'old', 'town', 'city', 'center',
-  'greece', 'greek', 'athens', 'thessaloniki', 'santorini', 'mykonos', 'crete', 'chania', 'heraklion',
-  'rhodes', 'corfu', 'nafplio', 'delphi', 'meteora', 'naxos', 'paros', 'zakynthos', 'kefalonia', 'olympia',
-  'the', 'and', 'of', 'in', 'by', 'to', 'st', 'agios', 'agia', 'nea', 'new', 'grand', 'view', 'sea',
+  'tour', 'trip', 'excursion', 'explore', 'exploration', 'historical', 'historic', 'walk', 'walking',
+  'greece', 'greek',
+  'the', 'and', 'of', 'in', 'by', 'to', 'st', 'agios', 'agia', 'panagia', 'profitis', 'ilias', 'nea', 'new', 'grand', 'view', 'sea',
+  'ταβέρνα', 'εστιατόριο', 'ξενοδοχείο', 'παραλία', 'αγία', 'άγιος', 'νέα', 'νέος',
 ]);
+
+const REGION_ONLY_TOKENS = new Set([
+  'athens', 'thessaloniki', 'santorini', 'mykonos', 'crete', 'chania', 'heraklion',
+  'rhodes', 'corfu', 'nafplio', 'naxos', 'paros', 'zakynthos', 'kefalonia',
+  'milos', 'syros', 'tinos', 'andros', 'hydra', 'spetses', 'aegina', 'poros', 'skiathos', 'skopelos',
+  'lefkada', 'ithaca', 'kalymnos', 'patmos', 'leros', 'samos', 'chios', 'lesvos', 'thassos', 'kavala',
+  'volos', 'ioannina', 'kastoria', 'kalamata', 'sparta', 'rethymno', 'sifnos', 'serifos',
+]);
+
+const GREEK_PLACE_CONFLICT_GROUPS: string[][] = [
+  ['athens', 'αθήνα', 'αθήνας'],
+  ['thessaloniki', 'θεσσαλονίκη', 'θεσσαλονίκης'],
+  ['santorini', 'σαντορίνη', 'σαντορίνης', 'thera', 'θήρα'],
+  ['mykonos', 'μύκονος', 'μυκόνου'],
+  ['milos', 'μήλος', 'μήλου'],
+  ['aegina', 'αίγινα', 'αίγινας'],
+  ['crete', 'κρήτη', 'κρήτης'],
+  ['chania', 'χανιά', 'χανίων'],
+  ['heraklion', 'ηράκλειο', 'ηρακλείου'],
+  ['rethymno', 'ρέθυμνο', 'ρεθύμνου'],
+  ['rhodes', 'ρόδος', 'ρόδου'],
+  ['corfu', 'κέρκυρα', 'κέρκυρας'],
+  ['paros', 'πάρος', 'πάρου'],
+  ['naxos', 'νάξος', 'νάξου'],
+  ['nafplio', 'ναύπλιο', 'ναυπλίου'],
+  ['delphi', 'δελφοί', 'δελφών'],
+  ['meteora', 'μετέωρα', 'μετεώρων'],
+  ['zakynthos', 'ζάκυνθος', 'ζακύνθου'],
+  ['kefalonia', 'κεφαλονιά', 'κεφαλληνία'],
+  ['hydra', 'ύδρα', 'ύδρας'],
+  ['syros', 'σύρος', 'σύρου'],
+  ['tinos', 'τήνος', 'τήνου'],
+  ['sifnos', 'σίφνος', 'σίφνου'],
+  ['lefkada', 'λευκάδα', 'λευκάδας'],
+  ['skiathos', 'σκιάθος', 'σκιάθου'],
+  ['kos', 'κως'],
+  ['samos', 'σάμος', 'σάμου'],
+  ['lesvos', 'λέσβος', 'λέσβου'],
+  ['ioannina', 'ιωάννινα', 'ιωαννίνων'],
+  ['monemvasia', 'μονεμβασιά', 'μονεμβασία'],
+  ['spetses', 'σπέτσες', 'σπετσών'],
+];
+
+function hasConflictingGreekLocation(candidateText: string, expectedLocationText: string): boolean {
+  const cand = candidateText.toLowerCase();
+  const expected = expectedLocationText.toLowerCase();
+  for (const group of GREEK_PLACE_CONFLICT_GROUPS) {
+    const mentionedInCandidate = group.some((alias) => {
+      if (alias.length <= 3) {
+        return new RegExp(`(?:^|[^\\p{L}])${alias}(?:$|[^\\p{L}])`, 'iu').test(cand);
+      }
+      return cand.includes(alias);
+    });
+    if (!mentionedInCandidate) continue;
+    const expectedMatchesGroup = group.some((alias) => expected.includes(alias));
+    if (!expectedMatchesGroup) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function sanitizeHttpUrl(raw?: string): string {
   if (!raw || typeof raw !== 'string') return '';
@@ -103,13 +164,109 @@ function isCleanPhotoUrl(url: string): boolean {
   const lower = url.toLowerCase();
   if (lower.startsWith('data:')) return false;
   if (/\.(svg|ico|gif|pdf)(\?|$)/i.test(lower)) return false;
-  if (/(favicon|sprite|logo|default-avatar|placeholder|blank\.|spacer\.|map_of_|location_map|flag_of_|coat_of_arms)/i.test(lower)) {
+  if (
+    /(favicon|sprite|logo|default-avatar|default_image|no-image|no_image|placeholder|blank\.|spacer\.|map_of_|location_map|flag_of_|coat_of_arms|gravatar|1x1|pixel\.|staticmap)/i.test(
+      lower
+    )
+  ) {
     return false;
   }
   if (/(shutterstock|istockphoto|alamy|depositphotos|dreamstime|123rf|gettyimages|vecteezy)\./i.test(lower)) {
     return false;
   }
   return /^https:\/\//i.test(url);
+}
+
+function canonicalPhotoKey(rawUrl: string): string {
+  const clean = String(rawUrl || '').trim();
+  if (!clean) return '';
+  try {
+    const u = new URL(clean);
+    const host = u.hostname.toLowerCase();
+    const p = decodeURIComponent(u.pathname).toLowerCase();
+    if (host.includes('wikimedia.org') || host.includes('wikipedia.org')) {
+      const thumbMatch = p.match(/\/thumb\/([^/]+\/[^/]+\/[^/]+)\//);
+      if (thumbMatch?.[1]) {
+        return `wikimedia:${thumbMatch[1]}`;
+      }
+      const directMatch = p.match(/\/(?:commons|en|el)\/([^/]+\/[^/]+\/[^/]+)$/);
+      if (directMatch?.[1]) {
+        return `wikimedia:${directMatch[1]}`;
+      }
+      const fileBase = (p.split('/').pop() || p).replace(/^\d+px-/, '');
+      return `wikimedia-file:${fileBase}`;
+    }
+    const stripParams = new Set([
+      'w',
+      'width',
+      'h',
+      'height',
+      'q',
+      'quality',
+      'fit',
+      'crop',
+      'auto',
+      'resize',
+      'dpr',
+      'sz',
+      's',
+      'fm',
+      'format',
+      'ixlib',
+      'v',
+      'ver',
+      'cb',
+    ]);
+    const kept = Array.from(u.searchParams.entries())
+      .filter(([k]) => !stripParams.has(k.toLowerCase()))
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => `${k}=${v}`)
+      .join('&');
+    return `${host}${p}${kept ? `?${kept}` : ''}`;
+  } catch {
+    return clean.toLowerCase();
+  }
+}
+
+async function verifyRealImageUrl(url: string): Promise<boolean> {
+  if (!isCleanPhotoUrl(url)) return false;
+  const lower = url.toLowerCase();
+  if (lower.includes('upload.wikimedia.org/') || lower.includes('api.openverse.org/')) {
+    return true;
+  }
+  try {
+    let res = await fetch(url, {
+      method: 'HEAD',
+      redirect: 'follow',
+      signal: AbortSignal.timeout(1800),
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+      },
+    });
+    if (res.status === 405 || res.status === 403) {
+      res = await fetch(url, {
+        method: 'GET',
+        redirect: 'follow',
+        signal: AbortSignal.timeout(1800),
+        headers: {
+          Range: 'bytes=0-1023',
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+        },
+      });
+    }
+    if (!res.ok) return false;
+    const ct = String(res.headers.get('content-type') || '').toLowerCase();
+    if (!ct.startsWith('image/') || ct.includes('svg') || ct.includes('icon')) return false;
+    const len = parseInt(res.headers.get('content-length') || '0', 10);
+    if (len > 0 && len < 2500) return false;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function fetchOgImageFromWebsite(websiteUrl: string): Promise<string> {
@@ -120,7 +277,8 @@ async function fetchOgImageFromWebsite(websiteUrl: string): Promise<string> {
       signal: AbortSignal.timeout(2400),
       redirect: 'follow',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         Accept: 'text/html,application/xhtml+xml',
       },
     });
@@ -129,109 +287,193 @@ async function fetchOgImageFromWebsite(websiteUrl: string): Promise<string> {
     if (!contentType.includes('text/html')) return '';
     const html = (await res.text()).slice(0, 95000);
     const metaMatch =
-      html.match(/<meta[^>]+(?:property|name)=["'](?:og:image|og:image:secure_url|twitter:image|twitter:image:src)["'][^>]+content=["']([^"']+)["']/i) ||
-      html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:image|og:image:secure_url|twitter:image|twitter:image:src)["']/i) ||
+      html.match(
+        /<meta[^>]+(?:property|name)=["'](?:og:image|og:image:secure_url|twitter:image|twitter:image:src)["'][^>]+content=["']([^"']+)["']/i
+      ) ||
+      html.match(
+        /<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:og:image|og:image:secure_url|twitter:image|twitter:image:src)["']/i
+      ) ||
       html.match(/<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)["']/i) ||
       html.match(/"image"\s*:\s*"((?:https?:)?\/\/[^"']+\.(?:jpe?g|png|webp)[^"']*)"/i);
     if (!metaMatch?.[1]) return '';
     const resolved = new URL(metaMatch[1].trim(), res.url || cleanSite).toString();
-    if (!isCleanPhotoUrl(resolved)) return '';
+    if (!(await verifyRealImageUrl(resolved))) return '';
     return resolved;
   } catch {
     return '';
   }
 }
 
-async function searchWikipediaPhoto(queryText: string, distinctiveTokens: string[], wikiLang: 'en' | 'el'): Promise<string> {
-  if (!queryText || distinctiveTokens.length === 0) return '';
+const NON_PLACE_NON_FOOD_WIKI_RE =
+  /\b(born \d|died \d|journalist|politician|writer|author|poet|actor|actress|singer|musician|rapper|footballer|athlete|basketball|painter|sculptor|monarch|bishop|admiral|general|scientist|physicist|mathematician|professor|film|television series|album|song by|novel by|comic book|video game|software|airline|warship|battleship|asteroid|genus of|species of)\b|δημοσιογράφος|πολιτικός|συγγραφέας|ηθοποιός|τραγουδιστής|ποδοσφαιριστής|ταινία|άλμπουμ/i;
+
+const CULINARY_WIKI_CONTEXT_RE =
+  /\b(dish|food|cuisine|meal|salad|soup|stew|pie|pastry|bread|cheese|dessert|sweet|cake|sauce|dip|puree|purée|spread|meze|mezze|appetizer|seafood|fish|meat|lamb|pork|chicken|vegetable|legume|bean|pea|eggplant|pasta|noodle|rice|greek|mediterranean|cyprus|cypriot|culinary|recipe|cooked|baked|fried|grilled)\b|φαγητό|πιάτο|κουζίνα|σαλάτα|σούπα|πίτα|γλυκό|τυρί|κρέας|ψάρι|όσπριο|πουρές|ελληνικ/i;
+
+const PLACE_WIKI_CONTEXT_RE =
+  /\b(taverna|restaurant|dining|hotel|resort|accommodation|archaeolog|temple|monastery|museum|castle|fortress|beach|island|village|town|landmark|monument|ruins|sanctuary|theater|theatre|stadium|square|port|harbor|harbour|gorge|cave|lake|mountain|national park|region|municipality|greece|greek)\b|ταβέρνα|εστιατόριο|ξενοδοχείο|μουσείο|ναός|μονή|κάστρο|παραλία|νησί|χωριό|αρχαιολογ|ελλάδα/i;
+
+function isRelevantWikipediaPage(
+  page: any,
+  opts: {
+    distinctiveTokens: string[];
+    isDish?: boolean;
+    expectedLocationText?: string;
+    extraContext?: string;
+  }
+): boolean {
+  const title = String(page?.title || '').trim();
+  const titleLower = title.toLowerCase();
+  const desc = String(page?.description || '').toLowerCase();
+  const extract = String(page?.extract || '').toLowerCase();
+  const contextText = `${titleLower} ${desc} ${extract}`;
+
+  if (!title || NON_PLACE_NON_FOOD_WIKI_RE.test(`${desc} ${extract}`)) {
+    return false;
+  }
+
+  if (opts.expectedLocationText && hasConflictingGreekLocation(titleLower, opts.expectedLocationText)) {
+    return false;
+  }
+
+  const matchedTitleTokens = opts.distinctiveTokens.filter((tok) => titleLower.includes(tok));
+  if (matchedTitleTokens.length === 0 && !opts.isDish) {
+    // Allow exact-title lookup only if extract/title shares a distinctive token
+    const matchedContextTokens = opts.distinctiveTokens.filter((tok) => contextText.includes(tok));
+    if (matchedContextTokens.length === 0) return false;
+  }
+
+  if (opts.isDish) {
+    if (matchedTitleTokens.length === 0) return false;
+    return CULINARY_WIKI_CONTEXT_RE.test(`${desc} ${extract}`) || /dish|food|cuisine|pie|salad|soup/i.test(titleLower);
+  }
+
+  // Place relevance check:
+  // If searching for a tavern/restaurant or hotel, avoid plain church/saint articles unless the name itself is a church/monastery
+  const wantsChurchOrMonastery = /(church|monastery|chapel|cathedral|agios|agia|panagia|μονή|ναός|αγία|άγιος)/i.test(
+    `${opts.extraContext || ''} ${opts.expectedLocationText || ''}`
+  );
+  if (
+    !wantsChurchOrMonastery &&
+    /(church|monastery|chapel|saint |αγία |άγιος |παναγία )/i.test(titleLower) &&
+    /(taverna|restaurant|hotel|resort)/i.test(opts.extraContext || '')
+  ) {
+    return false;
+  }
+
+  if (opts.distinctiveTokens.length >= 2 && matchedTitleTokens.length >= 2) {
+    return true;
+  }
+  const regionTokens = String(opts.expectedLocationText || '')
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((t) => t.length >= 4 && t !== 'greece');
+  const hasRegionInContext = regionTokens.some((rt) => contextText.includes(rt));
+  if (matchedTitleTokens.length >= 1 && (hasRegionInContext || PLACE_WIKI_CONTEXT_RE.test(`${desc} ${extract}`))) {
+    return true;
+  }
+  return false;
+}
+
+async function searchWikipediaPhotoCandidates(
+  queryText: string,
+  distinctiveTokens: string[],
+  wikiLang: 'en' | 'el',
+  opts: { isDish?: boolean; expectedLocationText?: string; extraContext?: string } = {}
+): Promise<string[]> {
+  if (!queryText || distinctiveTokens.length === 0) return [];
   try {
     const url = `https://${wikiLang}.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(
       queryText
-    )}&gsrlimit=5&prop=pageimages&pithumbsize=900&format=json&origin=*`;
-    const res = await fetch(url, {
-      signal: AbortSignal.timeout(2500),
-      headers: { 'User-Agent': 'AEGEA-Travel-Guide/1.0' },
-    });
-    if (!res.ok) return '';
-    const data: any = await res.json();
-    const pages: any[] = Object.values(data?.query?.pages || {}).sort((a: any, b: any) => (a.index ?? 99) - (b.index ?? 99));
-    for (const page of pages) {
-      const pageTitle = String(page?.title || '').toLowerCase();
-      const matched = distinctiveTokens.some((tok) => pageTitle.includes(tok));
-      const src = page?.thumbnail?.source;
-      if (matched && src && isCleanPhotoUrl(src)) {
-        return src;
-      }
-    }
-    return '';
-  } catch {
-    return '';
-  }
-}
-
-async function searchWikimediaCommonsPhoto(
-  queryText: string,
-  distinctiveTokens: string[],
-  requireTokenMatch = true,
-  usedUrls?: Set<string>
-): Promise<string> {
-  if (!queryText || (requireTokenMatch && distinctiveTokens.length === 0)) return '';
-  try {
-    const url = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrsearch=${encodeURIComponent(
-      queryText
-    )}&gsrlimit=10&prop=imageinfo&iiprop=url|mime|dimensions&iiurlwidth=900&format=json&origin=*`;
+    )}&gsrlimit=6&prop=pageimages|description|extracts&exintro=1&explaintext=1&exchars=240&pithumbsize=900&format=json&origin=*`;
     const res = await fetch(url, {
       signal: AbortSignal.timeout(2600),
       headers: { 'User-Agent': 'AEGEA-Travel-Guide/1.0' },
     });
-    if (!res.ok) return '';
+    if (!res.ok) return [];
     const data: any = await res.json();
-    const pages: any[] = Object.values(data?.query?.pages || {}).sort((a: any, b: any) => (a.index ?? 99) - (b.index ?? 99));
+    const pages: any[] = Object.values(data?.query?.pages || {}).sort(
+      (a: any, b: any) => (a.index ?? 99) - (b.index ?? 99)
+    );
+    const out: string[] = [];
     for (const page of pages) {
-      const titleLower = String(page?.title || '').toLowerCase();
-      if (/(map|diagram|logo|coat of arms|flag|location|plan|svg|chart|icon|emblem|seal|portrait)/i.test(titleLower)) continue;
-      const info = page?.imageinfo?.[0];
-      const mime = String(info?.mime || '').toLowerCase();
-      if (!/^image\/(jpeg|png|webp)$/.test(mime)) continue;
-      if (typeof info?.width === 'number' && info.width < 450) continue;
-      const matched = !requireTokenMatch || distinctiveTokens.some((tok) => titleLower.includes(tok));
-      const src = info?.thumburl || info?.url || '';
-      if (matched && src && isCleanPhotoUrl(src) && !usedUrls?.has(src)) {
-        usedUrls?.add(src);
-        return src;
+      const src = page?.thumbnail?.source || '';
+      if (!src || !isCleanPhotoUrl(src)) continue;
+      if (
+        isRelevantWikipediaPage(page, {
+          distinctiveTokens,
+          isDish: opts.isDish,
+          expectedLocationText: opts.expectedLocationText,
+          extraContext: opts.extraContext,
+        })
+      ) {
+        out.push(src);
       }
     }
-    return '';
+    return out;
   } catch {
-    return '';
+    return [];
   }
 }
 
-async function searchOpenversePhoto(
-  queryText: string,
-  distinctiveTokens: string[],
-  requireTokenMatch = true,
-  usedUrls?: Set<string>
+async function fetchWikipediaExactTitlePhoto(
+  title: string,
+  wikiLang: 'en' | 'el' | 'commons',
+  opts: { distinctiveTokens?: string[]; isDish?: boolean; expectedLocationText?: string; extraContext?: string } = {}
 ): Promise<string> {
-  if (!queryText || (requireTokenMatch && distinctiveTokens.length === 0)) return '';
+  const cleanTitle = String(title || '').trim();
+  if (!cleanTitle) return '';
   try {
-    const url = `https://api.openverse.org/v1/images/?q=${encodeURIComponent(queryText)}&page_size=12`;
+    if (wikiLang === 'commons' || /^File:/i.test(cleanTitle)) {
+      const fileTitle = /^File:/i.test(cleanTitle) ? cleanTitle : `File:${cleanTitle}`;
+      const titleLower = fileTitle.toLowerCase();
+      if (opts.expectedLocationText && hasConflictingGreekLocation(titleLower, opts.expectedLocationText)) {
+        return '';
+      }
+      const url = `https://commons.wikimedia.org/w/api.php?action=query&titles=${encodeURIComponent(
+        fileTitle
+      )}&prop=imageinfo&iiprop=url|mime|dimensions&iiurlwidth=900&format=json&origin=*`;
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(2300),
+        headers: { 'User-Agent': 'AEGEA-Travel-Guide/1.0' },
+      });
+      if (!res.ok) return '';
+      const data: any = await res.json();
+      const pages: any[] = Object.values(data?.query?.pages || {});
+      for (const page of pages) {
+        if (page?.missing) continue;
+        const info = page?.imageinfo?.[0];
+        const mime = String(info?.mime || '').toLowerCase();
+        if (!/^image\/(jpeg|png|webp)$/.test(mime)) continue;
+        if (typeof info?.width === 'number' && info.width < 400) continue;
+        const src = info?.thumburl || info?.url || '';
+        if (src && isCleanPhotoUrl(src)) return src;
+      }
+      return '';
+    }
+
+    const url = `https://${wikiLang}.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(
+      cleanTitle
+    )}&redirects=1&prop=pageimages|description|extracts&exintro=1&explaintext=1&exchars=240&pithumbsize=900&format=json&origin=*`;
     const res = await fetch(url, {
-      signal: AbortSignal.timeout(2500),
+      signal: AbortSignal.timeout(2300),
       headers: { 'User-Agent': 'AEGEA-Travel-Guide/1.0' },
     });
     if (!res.ok) return '';
     const data: any = await res.json();
-    const results: any[] = Array.isArray(data?.results) ? data.results : [];
-    for (const item of results) {
-      const hay = `${item?.title || ''} ${(item?.tags || []).map((t: any) => t?.name || '').join(' ')}`.toLowerCase();
-      if (/(map|diagram|logo|screenshot|cartoon|vector|clipart)/i.test(hay)) continue;
-      const matched = !requireTokenMatch || distinctiveTokens.some((tok) => hay.includes(tok));
-      const src = item?.url || item?.thumbnail || '';
-      if (matched && src && isCleanPhotoUrl(src) && !usedUrls?.has(src)) {
-        usedUrls?.add(src);
-        return src;
+    const pages: any[] = Object.values(data?.query?.pages || {});
+    for (const page of pages) {
+      if (page?.missing) continue;
+      const src = page?.thumbnail?.source || '';
+      if (!src || !isCleanPhotoUrl(src)) continue;
+      const desc = String(page?.description || '').toLowerCase();
+      const extract = String(page?.extract || '').toLowerCase();
+      if (NON_PLACE_NON_FOOD_WIKI_RE.test(`${desc} ${extract}`)) continue;
+      if (opts.isDish && !CULINARY_WIKI_CONTEXT_RE.test(`${page?.title || ''} ${desc} ${extract}`)) continue;
+      if (opts.expectedLocationText && hasConflictingGreekLocation(String(page?.title || ''), opts.expectedLocationText)) {
+        continue;
       }
+      return src;
     }
     return '';
   } catch {
@@ -239,7 +481,149 @@ async function searchOpenversePhoto(
   }
 }
 
-async function resolveVerifiedPlaceImage(params: {
+async function searchWikimediaCommonsCandidates(
+  queryText: string,
+  distinctiveTokens: string[],
+  opts: { isDish?: boolean; expectedLocationText?: string } = {}
+): Promise<string[]> {
+  if (!queryText || distinctiveTokens.length === 0) return [];
+  try {
+    const url = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrsearch=${encodeURIComponent(
+      queryText
+    )}&gsrlimit=12&prop=imageinfo&iiprop=url|mime|dimensions&iiurlwidth=900&format=json&origin=*`;
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(2600),
+      headers: { 'User-Agent': 'AEGEA-Travel-Guide/1.0' },
+    });
+    if (!res.ok) return [];
+    const data: any = await res.json();
+    const pages: any[] = Object.values(data?.query?.pages || {}).sort(
+      (a: any, b: any) => (a.index ?? 99) - (b.index ?? 99)
+    );
+    const out: string[] = [];
+    for (const page of pages) {
+      const titleLower = String(page?.title || '').toLowerCase();
+      if (
+        /(map|diagram|logo|coat of arms|flag|location|plan|svg|chart|icon|emblem|seal|portrait|grave|tomb|memorial)/i.test(
+          titleLower
+        )
+      ) {
+        continue;
+      }
+      if (opts.expectedLocationText && hasConflictingGreekLocation(titleLower, opts.expectedLocationText)) {
+        continue;
+      }
+      const info = page?.imageinfo?.[0];
+      const mime = String(info?.mime || '').toLowerCase();
+      if (!/^image\/(jpeg|png|webp)$/.test(mime)) continue;
+      if (typeof info?.width === 'number' && info.width < 450) continue;
+      const matchCount = distinctiveTokens.filter((tok) => titleLower.includes(tok)).length;
+      if (matchCount === 0) continue;
+      if (opts.isDish) {
+        const hasFoodHint =
+          /(food|dish|plate|salad|soup|pie|pastry|cheese|meze|puree|santorini|greek|taverna|recipe|cuisine|φαγητό)/i.test(
+            titleLower
+          ) || matchCount >= 2;
+        if (!hasFoodHint) continue;
+      } else if (distinctiveTokens.length >= 2 && matchCount < 2) {
+        const hasExpectedLoc = opts.expectedLocationText
+          ? opts.expectedLocationText
+              .toLowerCase()
+              .split(/\s+/)
+              .filter((t) => t.length >= 4 && t !== 'greece')
+              .some((t) => titleLower.includes(t))
+          : false;
+        if (!hasExpectedLoc) continue;
+      }
+      const src = info?.thumburl || info?.url || '';
+      if (src && isCleanPhotoUrl(src)) {
+        out.push(src);
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+async function searchOpenverseCandidates(
+  queryText: string,
+  distinctiveTokens: string[],
+  opts: { isDish?: boolean; expectedLocationText?: string } = {}
+): Promise<string[]> {
+  if (!queryText || distinctiveTokens.length === 0) return [];
+  try {
+    const url = `https://api.openverse.org/v1/images/?q=${encodeURIComponent(queryText)}&page_size=14`;
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(2500),
+      headers: { 'User-Agent': 'AEGEA-Travel-Guide/1.0' },
+    });
+    if (!res.ok) return [];
+    const data: any = await res.json();
+    const results: any[] = Array.isArray(data?.results) ? data.results : [];
+    const out: string[] = [];
+    for (const item of results) {
+      const hay = `${item?.title || ''} ${(item?.tags || []).map((t: any) => t?.name || '').join(' ')}`.toLowerCase();
+      if (/(map|diagram|logo|screenshot|cartoon|vector|clipart|portrait|journalist|politician)/i.test(hay)) continue;
+      if (opts.expectedLocationText && hasConflictingGreekLocation(hay, opts.expectedLocationText)) {
+        continue;
+      }
+      const matchCount = distinctiveTokens.filter((tok) => hay.includes(tok)).length;
+      if (matchCount === 0) continue;
+      if (opts.isDish) {
+        const hasFoodHint =
+          /(food|dish|cuisine|meal|salad|soup|pie|pastry|cheese|meze|puree|greek|plate|restaurant|taverna)/i.test(
+            hay
+          ) || matchCount >= 2;
+        if (!hasFoodHint) continue;
+      } else if (distinctiveTokens.length >= 2 && matchCount < 2) {
+        const hasExpectedLoc = opts.expectedLocationText
+          ? opts.expectedLocationText
+              .toLowerCase()
+              .split(/\s+/)
+              .filter((t) => t.length >= 4 && t !== 'greece')
+              .some((t) => hay.includes(t))
+          : false;
+        if (!hasExpectedLoc) continue;
+      }
+      const src = item?.url || item?.thumbnail || '';
+      if (src && isCleanPhotoUrl(src)) {
+        out.push(src);
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+function buildDistinctiveTokens(englishName: string, name: string, greekName: string, isDish: boolean) {
+  const stripParens = (s: string) => s.replace(/\([^)]*\)/g, ' ').trim();
+  const rawNames = `${stripParens(englishName)} ${stripParens(name)}`
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ');
+  const minLen = isDish ? 3 : 4;
+  const dishStopwords = new Set(['with', 'and', 'style', 'traditional', 'greek', 'fresh', 'the', 'puree', 'split']);
+  const baseWords = rawNames
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= minLen && (isDish ? !dishStopwords.has(t) : !GENERIC_PLACE_TOKENS.has(t)));
+  const nonRegionWords = isDish ? baseWords : baseWords.filter((t) => !REGION_ONLY_TOKENS.has(t));
+  const tokens = Array.from(new Set(nonRegionWords.length > 0 ? nonRegionWords : baseWords));
+  const greekTokens = Array.from(
+    new Set(
+      String(greekName || '')
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+        .split(/\s+/)
+        .map((t) => t.trim())
+        .filter((t) => t.length >= minLen && !GENERIC_PLACE_TOKENS.has(t))
+    )
+  );
+  return { tokens, greekTokens, allTokens: [...tokens, ...greekTokens] };
+}
+
+async function collectTier1PhotoCandidates(params: {
   englishName?: string;
   name?: string;
   greekName?: string;
@@ -249,9 +633,7 @@ async function resolveVerifiedPlaceImage(params: {
   groundingSources?: { title: string; uri: string }[];
   extraContext?: string;
   isDish?: boolean;
-  usedUrls?: Set<string>;
-  fallbackTopic?: string;
-}): Promise<string> {
+}): Promise<string[]> {
   const {
     englishName = '',
     name = '',
@@ -262,31 +644,11 @@ async function resolveVerifiedPlaceImage(params: {
     groundingSources = [],
     extraContext = '',
     isDish = false,
-    usedUrls,
-    fallbackTopic = '',
   } = params;
 
-  const rawNames = `${englishName} ${name}`.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ');
-  const minLen = isDish ? 3 : 4;
-  const tokens = Array.from(
-    new Set(
-      rawNames
-        .split(/\s+/)
-        .map((t) => t.trim())
-        .filter((t) => t.length >= minLen && (isDish || !GENERIC_PLACE_TOKENS.has(t)))
-    )
-  );
-
-  const greekTokens = Array.from(
-    new Set(
-      String(greekName || '')
-        .toLowerCase()
-        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-        .split(/\s+/)
-        .map((t) => t.trim())
-        .filter((t) => t.length >= minLen)
-    )
-  );
+  const { tokens, greekTokens, allTokens } = buildDistinctiveTokens(englishName, name, greekName, isDish);
+  const cleanPrimary = (englishName || name || '').replace(/\([^)]*\)/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!cleanPrimary && !greekName) return [];
 
   const matchedSrc =
     tokens.length > 0 && groundingSources.length > 0
@@ -296,66 +658,342 @@ async function resolveVerifiedPlaceImage(params: {
         })
       : undefined;
 
-  const primaryName = englishName || name;
-  const allTokens = [...tokens, ...greekTokens];
-  const enQuery = isDish ? `${primaryName} Greek food`.trim() : `${primaryName} ${region} ${extraContext} Greece`.trim();
-  const commonsQuery = isDish ? `${primaryName} Greek food`.trim() : `${primaryName} Greece`.trim();
+  const cleanRegion = region && !/[\u0600-\u06FF\u0370-\u03FF]/.test(region) ? region : '';
+  const expectedLocationText = `${cleanPrimary} ${cleanRegion} ${region}`.trim();
+  const compactTopic = tokens.length > 0 ? tokens.slice(0, 3).join(' ') : cleanPrimary;
+  const enQuery = isDish
+    ? `${cleanPrimary} Greek food`.trim()
+    : `${compactTopic} ${cleanRegion} Greece`.trim();
+  const commonsQuery = isDish
+    ? `${cleanPrimary} food`.trim()
+    : `${compactTopic} ${cleanRegion}`.trim();
 
-  // Tier 1: Run ALL exact place/dish lookups concurrently (zero sequential bottleneck!)
-  const [siteOg, bookOg, groundedOg, enWikiPrimary, enWikiFull, elWiki, commonsExact, openverseExact] = await Promise.all([
-    officialWebsite ? fetchOgImageFromWebsite(officialWebsite) : Promise.resolve(''),
-    bookingUrl && !/google\.com\/search/i.test(bookingUrl) ? fetchOgImageFromWebsite(bookingUrl) : Promise.resolve(''),
-    matchedSrc?.uri && matchedSrc.uri !== officialWebsite && matchedSrc.uri !== bookingUrl
-      ? fetchOgImageFromWebsite(matchedSrc.uri)
+  const softCap = <T,>(p: Promise<T>, fallback: T, ms = 3200): Promise<T> =>
+    Promise.race([
+      p.catch(() => fallback),
+      new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+    ]);
+
+  const [
+    siteOg,
+    bookOg,
+    groundedOg,
+    enWikiPrimary,
+    enWikiFull,
+    elWiki,
+    commonsExact,
+    commonsGreek,
+    openverseExact,
+    openverseDish,
+  ] = await Promise.all([
+    officialWebsite ? softCap(fetchOgImageFromWebsite(officialWebsite), '', 3600) : Promise.resolve(''),
+    bookingUrl && !/google\.com\/search/i.test(bookingUrl)
+      ? softCap(fetchOgImageFromWebsite(bookingUrl), '', 3600)
       : Promise.resolve(''),
-    searchWikipediaPhoto(primaryName, tokens, 'en'),
-    searchWikipediaPhoto(enQuery, tokens, 'en'),
-    greekName && greekTokens.length > 0 ? searchWikipediaPhoto(greekName, greekTokens, 'el') : Promise.resolve(''),
-    searchWikimediaCommonsPhoto(commonsQuery, allTokens, true, usedUrls),
-    searchOpenversePhoto(`${primaryName} ${region} Greece`.trim(), allTokens, true, usedUrls),
+    matchedSrc?.uri && matchedSrc.uri !== officialWebsite && matchedSrc.uri !== bookingUrl
+      ? softCap(fetchOgImageFromWebsite(matchedSrc.uri), '', 3600)
+      : Promise.resolve(''),
+    softCap(
+      searchWikipediaPhotoCandidates(cleanPrimary, tokens, 'en', {
+        isDish,
+        expectedLocationText,
+        extraContext,
+      }),
+      []
+    ),
+    softCap(
+      searchWikipediaPhotoCandidates(enQuery, tokens, 'en', {
+        isDish,
+        expectedLocationText,
+        extraContext,
+      }),
+      []
+    ),
+    greekName && greekTokens.length > 0
+      ? softCap(
+          searchWikipediaPhotoCandidates(greekName, greekTokens, 'el', {
+            isDish,
+            expectedLocationText,
+            extraContext,
+          }),
+          []
+        )
+      : Promise.resolve([]),
+    softCap(searchWikimediaCommonsCandidates(commonsQuery, allTokens, { isDish, expectedLocationText }), []),
+    isDish && greekName
+      ? softCap(searchWikimediaCommonsCandidates(`${greekName} food`, allTokens, { isDish: true }), [])
+      : Promise.resolve([]),
+    softCap(
+      searchOpenverseCandidates(`${compactTopic} ${cleanRegion} Greece`.trim(), allTokens, {
+        isDish,
+        expectedLocationText,
+      }),
+      []
+    ),
+    isDish
+      ? softCap(searchOpenverseCandidates(`${cleanPrimary} Greek dish food`.trim(), allTokens, { isDish: true }), [])
+      : Promise.resolve([]),
   ]);
 
-  const exactCandidates = [siteOg, bookOg, groundedOg, enWikiPrimary, enWikiFull, elWiki, commonsExact, openverseExact];
-  for (const cand of exactCandidates) {
-    if (cand && !usedUrls?.has(cand)) {
-      usedUrls?.add(cand);
-      return cand;
+  const candidates = [
+    siteOg,
+    bookOg,
+    groundedOg,
+    ...enWikiPrimary,
+    ...enWikiFull,
+    ...elWiki,
+    ...commonsExact,
+    ...commonsGreek,
+    ...openverseExact,
+    ...openverseDish,
+  ].filter((u) => Boolean(u && isCleanPhotoUrl(u)));
+
+  return Array.from(new Set(candidates));
+}
+
+async function collectTier1PhotoCandidatesWithBudget(
+  params: Parameters<typeof collectTier1PhotoCandidates>[0],
+  timeoutMs = 5200
+): Promise<string[]> {
+  return Promise.race([
+    collectTier1PhotoCandidates(params),
+    new Promise<string[]>((resolve) => setTimeout(() => resolve([]), timeoutMs)),
+  ]);
+}
+
+interface PhotoResolutionDescriptor {
+  uidKey: string;
+  kind: 'taverna' | 'hotel' | 'site' | 'dish' | 'gem';
+  name: string;
+  englishName: string;
+  greekName: string;
+  region: string;
+  officialWebsite: string;
+  bookingUrl: string;
+  extraContext: string;
+  isDish: boolean;
+  preExistingUrl?: string;
+}
+
+async function resolveMissingPhotosWithGemini(params: {
+  ai: GoogleGenAI | null;
+  items: PhotoResolutionDescriptor[];
+  targetCity: string;
+  groundingSources: { title: string; uri: string }[];
+}): Promise<Map<string, { candidates: string[]; officialUrl?: string }>> {
+  const resultMap = new Map<string, { candidates: string[]; officialUrl?: string }>();
+  const { ai, items, targetCity, groundingSources } = params;
+  if (!ai || items.length === 0) {
+    return resultMap;
+  }
+
+  const batch = items.slice(0, 12);
+  const compactItems = batch.map((it) => ({
+    id: it.uidKey,
+    kind: it.kind,
+    name: it.englishName || it.name,
+    greekName: it.greekName || '',
+    region: it.region || targetCity,
+  }));
+
+  const searchAvailable = Date.now() >= searchGroundingCooldownUntil;
+  const photoPrompt = searchAvailable
+    ? `Use Google Search right now to find REAL, authentic web pages and verified photograph sources for each of these Greek travel venues, monuments, and dishes (${targetCity}, Greece):
+${JSON.stringify(compactItems)}
+
+STRICT RULES:
+1. NEVER invent, guess, or fabricate URLs. Only return URLs and exact Wikipedia/Wikimedia titles you directly find via Google Search.
+2. For each item return:
+   - "id": exact matching id from input
+   - "officialUrl": real https:// official website, Wikipedia page, Wikimedia Commons page, or verified travel/restaurant listing URL (or "")
+   - "wikiPageTitle": exact English Wikipedia page title OR Wikimedia Commons "File:..." title if one exists (or "")
+   - "greekWikiTitle": exact Greek Wikipedia page title if one exists (or "")
+   - "directPhotoUrl": ONLY if you directly observed a real https:// upload.wikimedia.org or verified https:// venue/dish photograph URL in search results (or "")
+Respond ONLY with a valid JSON array.`
+    : `For each Greek landmark, dish, or notable venue below (${targetCity}, Greece), provide ONLY the exact canonical English Wikipedia article title ("wikiPageTitle") or Greek Wikipedia article title ("greekWikiTitle") if a genuine encyclopedic article exists for that specific subject (leave "" if uncertain or if it is a small restaurant/hotel without a Wikipedia article). NEVER invent URLs.
+Items: ${JSON.stringify(compactItems)}
+Respond ONLY with a valid JSON array of { "id", "wikiPageTitle", "greekWikiTitle" }.`;
+
+  let rawText = '';
+  const extraChunks: { title: string; uri: string }[] = [];
+  const models = ['gemini-3.1-flash-lite', 'gemini-4-hydrogen'].filter((m) => isModelAvailable(m));
+  let quotaFailCount = 0;
+
+  if (searchAvailable) {
+    for (const model of models) {
+      try {
+        const cfg: any = { tools: [{ googleSearch: {} }] };
+        if (model === 'gemini-4-hydrogen') {
+          cfg.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
+        }
+        const gRes = await withPromiseTimeout(
+          ai.models.generateContent({
+            model,
+            contents: photoPrompt,
+            config: cfg,
+          }),
+          9800,
+          `gemini-photo-search-${model}`
+        );
+        rawText = gRes.text || '';
+        const chunks = gRes.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+        for (const ch of chunks as any[]) {
+          const uri = sanitizeHttpUrl(ch?.web?.uri);
+          if (uri) extraChunks.push({ title: String(ch?.web?.title || uri), uri });
+        }
+        if (rawText.trim()) break;
+      } catch (err: any) {
+        if (isQuotaError(err)) {
+          quotaFailCount += 1;
+          continue;
+        }
+        if (isTransientRetryableError(err)) {
+          markModelTemporarilyBusy(model);
+        }
+      }
+    }
+    if (models.length > 0 && quotaFailCount >= models.length) {
+      searchGroundingCooldownUntil = Date.now() + 3 * 60 * 1000;
     }
   }
 
-  // Tier 2: Live contextual real web photography for this exact Greek destination & category (never static stock!)
-  const cleanRegion = region && !/[\u0600-\u06FF\u0370-\u03FF]/.test(region) ? region : '';
-  const contextualQuery = fallbackTopic
-    ? `${cleanRegion} ${fallbackTopic} Greece`.replace(/\s+/g, ' ').trim()
-    : isDish
-    ? `${primaryName} Greek traditional dish food`.replace(/\s+/g, ' ').trim()
-    : `${cleanRegion} ${extraContext || 'Aegean architecture'} Greece`.replace(/\s+/g, ' ').trim();
+  if (!rawText.trim()) {
+    try {
+      const wikiSuggestRes = await callGeminiWithFallback(ai, {
+        models: ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'],
+        contents: `For each Greek landmark, dish, or notable venue below (${targetCity}, Greece), provide ONLY the exact canonical English Wikipedia article title ("wikiPageTitle") or Greek Wikipedia article title ("greekWikiTitle") if a genuine Wikipedia article exists for that exact subject (use "" if unsure). NEVER include URLs.\nItems: ${JSON.stringify(compactItems)}\nReturn JSON array of { "id", "wikiPageTitle", "greekWikiTitle" }.`,
+        maxPasses: 1,
+        totalBudgetMs: 7000,
+        perAttemptTimeoutMs: 6500,
+      });
+      rawText = wikiSuggestRes.text || '';
+    } catch {
+      // keep empty rawText
+    }
+  }
 
-  const [ctxOpenverse, ctxCommons] = await Promise.all([
-    searchOpenversePhoto(contextualQuery, [], false, usedUrls),
-    searchWikimediaCommonsPhoto(contextualQuery, [], false, usedUrls),
+  let parsedRows: any[] = [];
+  if (rawText) {
+    try {
+      const parsed = extractAndParseJSON(rawText);
+      if (Array.isArray(parsed)) parsedRows = parsed;
+      else if (Array.isArray(parsed?.items)) parsedRows = parsed.items;
+    } catch {
+      parsedRows = [];
+    }
+  }
+
+  const allSources = [...extraChunks, ...groundingSources];
+  const rowById = new Map<string, any>();
+  for (const r of parsedRows) {
+    if (r?.id) rowById.set(String(r.id), r);
+  }
+
+  await Promise.race([
+    Promise.all(
+      batch.map(async (item) => {
+        const row = rowById.get(item.uidKey) || {};
+        const { tokens, greekTokens, allTokens } = buildDistinctiveTokens(
+          item.englishName,
+          item.name,
+          item.greekName,
+          item.isDish
+        );
+        const officialUrl = sanitizeHttpUrl(row.officialUrl);
+        const directPhotoUrl = sanitizeHttpUrl(row.directPhotoUrl);
+        const wikiTitle = String(row.wikiPageTitle || '').trim();
+        const greekWikiTitle = String(row.greekWikiTitle || '').trim();
+
+        const matchedChunk =
+          tokens.length > 0
+            ? allSources.find((src) => {
+                const txt = `${src.title} ${src.uri}`.toLowerCase();
+                return tokens.some((tok) => txt.includes(tok));
+              })
+            : undefined;
+
+        const expectedLoc = `${item.englishName} ${item.region}`.trim();
+        const [directOk, officialOg, chunkOg, enWikiExact, elWikiExact, commonsFromTitle] = await Promise.all([
+          directPhotoUrl ? verifyRealImageUrl(directPhotoUrl) : Promise.resolve(false),
+          officialUrl ? fetchOgImageFromWebsite(officialUrl) : Promise.resolve(''),
+          matchedChunk?.uri && matchedChunk.uri !== officialUrl
+            ? fetchOgImageFromWebsite(matchedChunk.uri)
+            : Promise.resolve(''),
+          wikiTitle
+            ? fetchWikipediaExactTitlePhoto(wikiTitle, /^File:/i.test(wikiTitle) ? 'commons' : 'en', {
+                distinctiveTokens: tokens,
+                isDish: item.isDish,
+                expectedLocationText: expectedLoc,
+                extraContext: item.extraContext,
+              })
+            : Promise.resolve(''),
+          greekWikiTitle
+            ? fetchWikipediaExactTitlePhoto(greekWikiTitle, 'el', {
+                distinctiveTokens: greekTokens,
+                isDish: item.isDish,
+                expectedLocationText: expectedLoc,
+                extraContext: item.extraContext,
+              })
+            : Promise.resolve(''),
+          wikiTitle && !/^File:/i.test(wikiTitle)
+            ? searchWikimediaCommonsCandidates(
+                wikiTitle,
+                Array.from(new Set([...allTokens, ...wikiTitle.toLowerCase().split(/\s+/).filter((t) => t.length >= 4)])),
+                { isDish: item.isDish, expectedLocationText: expectedLoc }
+              )
+            : Promise.resolve([]),
+        ]);
+
+        const candidates = [
+          directOk ? directPhotoUrl : '',
+          officialOg,
+          chunkOg,
+          enWikiExact,
+          elWikiExact,
+          ...commonsFromTitle,
+        ].filter((u) => Boolean(u && isCleanPhotoUrl(u)));
+
+        const nonWikiOfficial =
+          officialUrl && !/wikipedia\.org|wikimedia\.org|google\.com\/search/i.test(officialUrl)
+            ? officialUrl
+            : '';
+
+        resultMap.set(item.uidKey, {
+          candidates: Array.from(new Set(candidates)),
+          officialUrl: nonWikiOfficial || undefined,
+        });
+      })
+    ),
+    new Promise<void>((resolve) => setTimeout(resolve, 6500)),
   ]);
 
-  if (ctxOpenverse) return ctxOpenverse;
-  if (ctxCommons) return ctxCommons;
+  return resultMap;
+}
 
-  // Broad Greece real photo safety net if regional query yielded nothing
-  const broadQuery = isDish ? 'Greek Mediterranean food meze' : `${extraContext || 'Greece'} Aegean sea`;
-  const [broadOv, broadCm] = await Promise.all([
-    searchOpenversePhoto(broadQuery, [], false, usedUrls),
-    searchWikimediaCommonsPhoto(broadQuery, [], false, usedUrls),
-  ]);
-  return broadOv || broadCm || '';
+function claimUniquePhotoFromCandidates(
+  candidates: string[],
+  usedPhotoKeys: Set<string>,
+  avoidPhotoKeys: Set<string>
+): string {
+  for (const cand of candidates) {
+    if (!isCleanPhotoUrl(cand)) continue;
+    const key = canonicalPhotoKey(cand);
+    if (!key) continue;
+    if (usedPhotoKeys.has(key) || avoidPhotoKeys.has(key)) continue;
+    usedPhotoKeys.add(key);
+    avoidPhotoKeys.add(key);
+    return cand;
+  }
+  return '';
 }
 
 async function resolveVerifiedPlaceImageWithBudget(
-  params: Parameters<typeof resolveVerifiedPlaceImage>[0],
-  timeoutMs = 6800
+  params: Parameters<typeof collectTier1PhotoCandidates>[0] & { usedUrls?: Set<string>; fallbackTopic?: string },
+  timeoutMs = 5200
 ): Promise<string> {
-  return Promise.race([
-    resolveVerifiedPlaceImage(params),
-    new Promise<string>((resolve) => setTimeout(() => resolve(''), timeoutMs)),
-  ]);
+  const candidates = await collectTier1PhotoCandidatesWithBudget(params, timeoutMs);
+  const used = params.usedUrls || new Set<string>();
+  return claimUniquePhotoFromCandidates(candidates, used, new Set<string>());
 }
 
 // Verify Firebase ID Token via Google Identity Toolkit (supports Google Sign-In & Email/Password)
@@ -387,12 +1025,14 @@ async function verifyFirebaseIdToken(idToken: string): Promise<{ uid: string; em
 
 async function fetchFirestoreUserApproval(
   uid: string,
-  idToken: string
+  idToken: string,
+  accountEmail = ''
 ): Promise<{
   approvalStatus: 'pending' | 'approved' | 'rejected';
   isPremium: boolean;
   subscriptionPlan: string;
   subscriptionExpiresAt: string;
+  searchesRemaining?: number;
 } | null> {
   if (!firebaseProjectId || !uid || !idToken) return null;
   try {
@@ -412,13 +1052,25 @@ async function fetchFirestoreUserApproval(
     const isPremium = Boolean(fields.isPremium?.booleanValue);
     const subscriptionPlan = String(fields.subscriptionPlan?.stringValue || 'free');
     const subscriptionExpiresAt = String(fields.subscriptionExpiresAt?.stringValue || '');
+    const approvedBy = String(fields.approvedBy?.stringValue || '').trim().toLowerCase();
+    const paymentNote = String(fields.paymentNote?.stringValue || '').trim();
+    const searchesRemainingRaw =
+      fields.searchesRemaining?.integerValue !== undefined
+        ? Number(fields.searchesRemaining.integerValue)
+        : undefined;
+
+    const cleanEmail = accountEmail.trim().toLowerCase();
+    const isLegacySelfApproved =
+      !ADMIN_EMAIL_SET.has(cleanEmail) &&
+      (Boolean(cleanEmail && approvedBy === cleanEmail) || paymentNote === 'Site Administrator');
+
     const expired =
       Boolean(subscriptionExpiresAt) &&
       Number.isFinite(Date.parse(subscriptionExpiresAt)) &&
       Date.now() > Date.parse(subscriptionExpiresAt);
 
     const approvalStatus =
-      expired
+      expired || isLegacySelfApproved
         ? 'pending'
         : approvalRaw === 'approved' || approvalRaw === 'rejected'
         ? approvalRaw
@@ -426,9 +1078,10 @@ async function fetchFirestoreUserApproval(
 
     return {
       approvalStatus,
-      isPremium: expired ? false : isPremium,
-      subscriptionPlan: expired ? 'free' : subscriptionPlan,
-      subscriptionExpiresAt,
+      isPremium: expired || isLegacySelfApproved ? false : isPremium,
+      subscriptionPlan: expired || isLegacySelfApproved ? 'free' : subscriptionPlan,
+      subscriptionExpiresAt: isLegacySelfApproved ? '' : subscriptionExpiresAt,
+      searchesRemaining: isLegacySelfApproved ? 2 : searchesRemainingRaw,
     };
   } catch (err) {
     console.warn('[FIRESTORE APPROVAL CHECK]', (err as Error)?.message || err);
@@ -884,18 +1537,15 @@ function getGuestSearchesRemaining(trialId: string, clientIp: string): number {
 }
 
 function validateSessionActive(session: SessionPayload): SessionPayload {
-  if (session.role === 'vip' && session.codeId && session.codeId !== 'env') {
-    const rec = securityStore.codes.find((c) => c.id === session.codeId);
-    const expired = Boolean(rec?.expiresAt && Date.now() > Date.parse(rec.expiresAt));
-    if (!rec || rec.revoked || expired) {
-      return {
-        ...session,
-        role: 'guest',
-        plan: 'free',
-        codeId: undefined,
-        codeHint: undefined,
-      };
-    }
+  // All authentication & Admin/subscriber roles MUST come exclusively from verified Firebase Email/Google tokens
+  if (session.role === 'admin' || session.role === 'vip') {
+    return {
+      ...session,
+      role: 'guest',
+      plan: 'free',
+      codeId: undefined,
+      codeHint: undefined,
+    };
   }
   return session;
 }
@@ -941,20 +1591,31 @@ function mintGuestSession(existingTrialId?: string, termsAccepted = false): Sess
   };
 }
 
+type PaidFeatureKind = 'recommend' | 'translator' | 'tts' | 'itinerary';
+
 interface PaidAccessCheck {
   allowed: boolean;
   status?: number;
   error?: string;
   approvalRequired?: boolean;
+  trialExhausted?: boolean;
+  subscriptionRequired?: boolean;
   approvalStatus?: 'pending' | 'rejected' | 'unregistered';
   isAdmin?: boolean;
+  isPremium?: boolean;
+  isTrial?: boolean;
+  trialRemainingBefore?: number;
+  consumeTrial?: () => number;
   uid?: string;
   trialId: string;
   email?: string;
   session?: SessionPayload;
 }
 
-async function resolvePaidFeatureAccess(req: Request): Promise<PaidAccessCheck> {
+async function resolvePaidFeatureAccess(
+  req: Request,
+  feature: PaidFeatureKind = 'recommend'
+): Promise<PaidAccessCheck> {
   const authHeader = String(req.headers.authorization || '');
   const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
 
@@ -974,6 +1635,7 @@ async function resolvePaidFeatureAccess(req: Request): Promise<PaidAccessCheck> 
       return {
         allowed: true,
         isAdmin: true,
+        isPremium: true,
         uid: fb.uid,
         trialId: fb.uid,
         email: fb.email,
@@ -983,7 +1645,7 @@ async function resolvePaidFeatureAccess(req: Request): Promise<PaidAccessCheck> 
       return {
         allowed: false,
         status: 403,
-        error: 'Please verify your email address first, then complete subscription payment to be activated by the Admin.',
+        error: 'Please verify your email address first to unlock your 2 free trials or request Admin subscription activation.',
         approvalRequired: true,
         approvalStatus: 'pending',
         uid: fb.uid,
@@ -991,11 +1653,12 @@ async function resolvePaidFeatureAccess(req: Request): Promise<PaidAccessCheck> 
         email: fb.email,
       };
     }
-    const statusDoc = await fetchFirestoreUserApproval(fb.uid, bearerToken);
+    const statusDoc = await fetchFirestoreUserApproval(fb.uid, bearerToken, fb.email);
     if (statusDoc && statusDoc.approvalStatus === 'approved' && statusDoc.isPremium) {
       return {
         allowed: true,
         isAdmin: false,
+        isPremium: true,
         uid: fb.uid,
         trialId: fb.uid,
         email: fb.email,
@@ -1013,11 +1676,76 @@ async function resolvePaidFeatureAccess(req: Request): Promise<PaidAccessCheck> 
         email: fb.email,
       };
     }
+
+    // VIP 3-Day Itinerary & full suite strictly require Admin-activated paid subscription
+    if (feature === 'itinerary') {
+      return {
+        allowed: false,
+        status: 403,
+        error:
+          '3-Day VIP Itinerary requires an active subscription (€5/month or €50/year). Send your payment receipt via WhatsApp for Admin activation.',
+        approvalRequired: true,
+        subscriptionRequired: true,
+        approvalStatus: 'pending',
+        uid: fb.uid,
+        trialId: fb.uid,
+        email: fb.email,
+      };
+    }
+
+    // Verified non-admin pending accounts receive strictly 2 Free Trials (Search + Live Translator)
+    const serverUsed = securityStore.trials[fb.uid]?.used ?? 0;
+    const fsUsed =
+      statusDoc?.searchesRemaining !== undefined
+        ? Math.max(0, GUEST_FREE_SEARCH_LIMIT - Math.min(GUEST_FREE_SEARCH_LIMIT, statusDoc.searchesRemaining))
+        : 0;
+    const effectiveUsed = Math.max(serverUsed, fsUsed);
+    const remainingBefore = Math.max(0, GUEST_FREE_SEARCH_LIMIT - effectiveUsed);
+
+    if (feature === 'tts') {
+      // Allow TTS voice playback during the active 2-trial window without burning an extra credit
+      if (effectiveUsed <= GUEST_FREE_SEARCH_LIMIT) {
+        return {
+          allowed: true,
+          isAdmin: false,
+          isPremium: false,
+          isTrial: true,
+          trialRemainingBefore: remainingBefore,
+          uid: fb.uid,
+          trialId: fb.uid,
+          email: fb.email,
+        };
+      }
+    } else if (effectiveUsed < GUEST_FREE_SEARCH_LIMIT) {
+      const consumeTrial = () => {
+        const nextUsed = Math.min(GUEST_FREE_SEARCH_LIMIT, effectiveUsed + 1);
+        securityStore.trials[fb.uid] = {
+          used: nextUsed,
+          updatedAt: Date.now(),
+        };
+        persistSecurityStore();
+        return Math.max(0, GUEST_FREE_SEARCH_LIMIT - nextUsed);
+      };
+      return {
+        allowed: true,
+        isAdmin: false,
+        isPremium: false,
+        isTrial: true,
+        trialRemainingBefore: remainingBefore,
+        consumeTrial,
+        uid: fb.uid,
+        trialId: fb.uid,
+        email: fb.email,
+      };
+    }
+
     return {
       allowed: false,
       status: 403,
-      error: 'Your account is pending Admin approval. Please pay your subscription via WhatsApp so Admin can activate your account.',
+      error:
+        'You have used your 2 free trials. Please open WhatsApp and send your payment receipt (€5/month or €50/year) so Admin can unlock unlimited access.',
       approvalRequired: true,
+      trialExhausted: true,
       approvalStatus: 'pending',
       uid: fb.uid,
       trialId: fb.uid,
@@ -1027,20 +1755,11 @@ async function resolvePaidFeatureAccess(req: Request): Promise<PaidAccessCheck> 
 
   const { session } = resolveSessionFromRequest(req);
   const active = session ? validateSessionActive(session) : null;
-  if (active && (active.role === 'admin' || active.role === 'vip')) {
-    return {
-      allowed: true,
-      isAdmin: active.role === 'admin',
-      uid: active.sid,
-      trialId: active.trialId,
-      session: active,
-    };
-  }
 
   return {
     allowed: false,
     status: 403,
-    error: 'Sign in with your email and request Admin subscription activation (or redeem a VIP code) to unlock AEGEA AI.',
+    error: 'Sign in with your Google or Email account to receive 2 free trials or subscribe (€5/mo or €50/yr).',
     approvalRequired: true,
     approvalStatus: 'unregistered',
     trialId: active?.trialId || 'unauth',
@@ -1056,11 +1775,7 @@ async function requireAdminMiddleware(req: Request, res: Response, next: NextFun
       return next();
     }
   }
-  const { session } = resolveSessionFromRequest(req);
-  if (!session || session.role !== 'admin') {
-    return res.status(403).json({ error: 'Admin authorization required.' });
-  }
-  return next();
+  return res.status(403).json({ error: 'Verified Admin email sign-in required.' });
 }
 
 // Health check for Render / Cloud Run / uptime probes
@@ -1106,11 +1821,11 @@ app.get('/api/subscribe-whatsapp', (req: Request, res: Response) => {
     };
     const chosen = planNames[plan] || planNames.monthly;
 
-    text = `Hello AEGEA Admin! I registered with my email${emailTag} and would like to pay for ${chosen.en} to activate my account.`;
+    text = `Hello AEGEA Admin! I registered with my email${emailTag} and I am sending my payment receipt for ${chosen.en} to unlock unlimited access.`;
     if (lang.startsWith('ar')) {
-      text = `مرحباً مدير تطبيق AEGEA! قمت بالتسجيل عبر البريد الإلكتروني${emailTag} وأرغب في دفع قيمة اشتراك (${chosen.ar}) لتفعيل حسابي.`;
+      text = `مرحباً مدير تطبيق AEGEA! قمت بالتسجيل بالبريد الإلكتروني${emailTag} وهذا إيصال الدفع لباقة (${chosen.ar}) لفتح الخدمات غير المحدودة على حسابي.`;
     } else if (lang.startsWith('el')) {
-      text = `Γεια σας! Εγγράφηκα με το email μου${emailTag} και θα ήθελα να πληρώσω για το ${chosen.el} ώστε να ενεργοποιηθεί ο λογαριασμός μου.`;
+      text = `Γεια σας! Εγγράφηκα με το email μου${emailTag} και στέλνω την απόδειξη πληρωμής για το ${chosen.el} ώστε να ενεργοποιηθεί η απεριόριστη πρόσβαση.`;
     }
   }
 
@@ -1184,94 +1899,10 @@ app.post('/api/auth/health-profile', requireSameOriginOrHeader, (req: Request, r
   });
 });
 
-// Redeem VIP Activation Code (strictly rate-limited & constant-time verified)
-app.post('/api/auth/redeem-code', redeemCodeLimiter, requireSameOriginOrHeader, (req: Request, res: Response) => {
-  const { code = '', termsAccepted } = req.body || {};
-  if (!termsAccepted) {
-    return res.status(400).json({ error: 'Please accept the Terms & Conditions before activating your code.' });
-  }
-
-  const normalized = normalizeActivationCode(String(code));
-  if (normalized.length < 6 || normalized.length > 64) {
-    return res.status(400).json({ error: 'Please enter a valid activation code.' });
-  }
-
-  const candidateHash = hashActivationCode(normalized);
-  const now = Date.now();
-  let matchedPlan: SecurityPlan | null = null;
-  let matchedDurationDays = 30;
-  let matchedCodeId = '';
-  let matchedHint = maskActivationCode(normalized);
-
-  // 1. Check persisted admin-issued activation codes
-  const matchedRecord = securityStore.codes.find((entry) => {
-    const a = Buffer.from(entry.codeHash, 'hex');
-    const b = Buffer.from(candidateHash, 'hex');
-    return a.length === b.length && crypto.timingSafeEqual(a, b);
-  });
-
-  if (matchedRecord) {
-    if (matchedRecord.revoked) {
-      return res.status(401).json({ error: 'This activation code has been revoked.' });
-    }
-    if (matchedRecord.expiresAt && now > Date.parse(matchedRecord.expiresAt)) {
-      return res.status(401).json({ error: 'This activation code has expired.' });
-    }
-    if (matchedRecord.usesCount >= matchedRecord.maxUses) {
-      return res.status(401).json({ error: 'This activation code has reached its maximum device activations.' });
-    }
-    matchedRecord.usesCount += 1;
-    matchedPlan = matchedRecord.plan;
-    matchedDurationDays = matchedRecord.durationDays || 30;
-    matchedCodeId = matchedRecord.id;
-    matchedHint = matchedRecord.codePrefix;
-    persistSecurityStore();
-  } else {
-    // 2. Check optional VIP_ACCESS_CODES env list (for stateless container restarts)
-    const envCodes = String(process.env.VIP_ACCESS_CODES || '')
-      .split(',')
-      .map((c) => normalizeActivationCode(c))
-      .filter(Boolean);
-
-    for (const ec of envCodes) {
-      const a = Buffer.from(hashActivationCode(ec), 'hex');
-      const b = Buffer.from(candidateHash, 'hex');
-      if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
-        matchedPlan = 'monthly';
-        matchedDurationDays = 30;
-        matchedCodeId = 'env';
-        break;
-      }
-    }
-  }
-
-  if (!matchedPlan) {
-    return res.status(401).json({ error: 'Invalid activation code. Please check the code and try again.' });
-  }
-
-  const clientIp = getClientIp(req);
-  const resolved = resolveSessionFromRequest(req);
-  const trialId = resolved.session?.trialId || `trl_${crypto.randomBytes(12).toString('hex')}`;
-  const durationMs = matchedDurationDays * 24 * 60 * 60 * 1000;
-  const vipSession: SessionPayload = {
-    sid: `vip_${crypto.randomBytes(10).toString('hex')}`,
-    trialId,
-    role: 'vip',
-    plan: matchedPlan,
-    codeId: matchedCodeId,
-    codeHint: matchedHint,
-    termsAccepted: true,
-    iat: now,
-    exp: now + durationMs,
-  };
-
-  const token = signSessionToken(vipSession);
-  emitSessionCookie(res, token, Math.floor(durationMs / 1000));
-
-  return res.json({
-    user: buildPublicSessionUser(vipSession, clientIp),
-    sessionToken: token,
-    adminSetupRequired: !isAdminPasscodeConfigured(),
+// Legacy Activation Code sign-in has been retired — accounts authenticate via Google/Email and Admin approval
+app.post('/api/auth/redeem-code', redeemCodeLimiter, requireSameOriginOrHeader, (_req: Request, res: Response) => {
+  return res.status(410).json({
+    error: 'Activation codes are disabled. Please sign in with your Google or Email account for Admin activation.',
   });
 });
 
@@ -1289,73 +1920,16 @@ app.post('/api/auth/signout', requireSameOriginOrHeader, (req: Request, res: Res
   });
 });
 
-// One-time inline Admin Passcode setup (locks permanently once claimed)
-app.post('/api/admin/setup', adminAuthLimiter, requireSameOriginOrHeader, (req: Request, res: Response) => {
-  if (isAdminPasscodeConfigured()) {
-    return res.status(409).json({ error: 'Admin passcode is already configured. Please sign in.' });
-  }
-  const passcode = String(req.body?.passcode || '').trim();
-  if (passcode.length < 8 || passcode.length > 128) {
-    return res.status(400).json({ error: 'Admin passcode must be between 8 and 128 characters.' });
-  }
-
-  const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.scryptSync(passcode, salt, 64).toString('hex');
-  securityStore.adminPasscodeSalt = salt;
-  securityStore.adminPasscodeHash = hash;
-  persistSecurityStore();
-
-  const clientIp = getClientIp(req);
-  const resolved = resolveSessionFromRequest(req);
-  const now = Date.now();
-  const adminSession: SessionPayload = {
-    sid: `adm_${crypto.randomBytes(10).toString('hex')}`,
-    trialId: resolved.session?.trialId || `trl_${crypto.randomBytes(12).toString('hex')}`,
-    role: 'admin',
-    plan: 'annual',
-    termsAccepted: true,
-    iat: now,
-    exp: now + 7 * 24 * 60 * 60 * 1000,
-  };
-  const token = signSessionToken(adminSession);
-  emitSessionCookie(res, token, 7 * 24 * 60 * 60);
-
-  return res.json({
-    user: buildPublicSessionUser(adminSession, clientIp),
-    sessionToken: token,
-    adminSetupRequired: false,
+// Email-less Admin passcode login is disabled — Admin must sign in with verified Admin Google/Email account
+app.post('/api/admin/setup', adminAuthLimiter, requireSameOriginOrHeader, (_req: Request, res: Response) => {
+  return res.status(403).json({
+    error: 'Admin access requires signing in with your verified Admin email via Google or Email.',
   });
 });
 
-// Admin Passcode Sign-In
-app.post('/api/admin/login', adminAuthLimiter, requireSameOriginOrHeader, (req: Request, res: Response) => {
-  if (!isAdminPasscodeConfigured()) {
-    return res.status(400).json({ error: 'Admin passcode is not set up yet. Complete first-time setup.' });
-  }
-  const passcode = String(req.body?.passcode || '');
-  if (!verifyAdminPasscode(passcode)) {
-    return res.status(401).json({ error: 'Incorrect admin passcode.' });
-  }
-
-  const clientIp = getClientIp(req);
-  const resolved = resolveSessionFromRequest(req);
-  const now = Date.now();
-  const adminSession: SessionPayload = {
-    sid: `adm_${crypto.randomBytes(10).toString('hex')}`,
-    trialId: resolved.session?.trialId || `trl_${crypto.randomBytes(12).toString('hex')}`,
-    role: 'admin',
-    plan: 'annual',
-    termsAccepted: true,
-    iat: now,
-    exp: now + 7 * 24 * 60 * 60 * 1000,
-  };
-  const token = signSessionToken(adminSession);
-  emitSessionCookie(res, token, 7 * 24 * 60 * 60);
-
-  return res.json({
-    user: buildPublicSessionUser(adminSession, clientIp),
-    sessionToken: token,
-    adminSetupRequired: false,
+app.post('/api/admin/login', adminAuthLimiter, requireSameOriginOrHeader, (_req: Request, res: Response) => {
+  return res.status(403).json({
+    error: 'Admin access requires signing in with your verified Admin email via Google or Email.',
   });
 });
 
@@ -2420,9 +2994,14 @@ async function buildLiveWikipediaGreeceFallback(params: {
     fetchWikiGeoSearchDetailed(cityCoord.lat, cityCoord.lon, 10, 'en'),
   ]);
 
+  const usedFallbackPhotoKeys = new Set<string>();
   const pickPhoto = (page: any) => {
     const src = page?.thumbnail?.source || '';
-    return isCleanPhotoUrl(src) ? src : '';
+    if (!isCleanPhotoUrl(src)) return '';
+    const key = canonicalPhotoKey(src);
+    if (!key || usedFallbackPhotoKeys.has(key)) return '';
+    usedFallbackPhotoKeys.add(key);
+    return src;
   };
 
   const dedupeByTitle = (arr: any[]) => {
@@ -2482,28 +3061,7 @@ async function buildLiveWikipediaGreeceFallback(params: {
           imageUrl: '',
           coordinates: isValidGreeceCoords(v.lat, v.lng) ? { lat: v.lat!, lng: v.lng! } : undefined,
         }))
-      : uniqueSites.slice(0, 4).map((p, idx) => ({
-          id: `t-${idx + 1}`,
-          rank: idx + 1,
-          name: p.title,
-          englishName: p.title,
-          greekName: p.title,
-          region: cityLabel,
-          location: `${cityLabel}، ${countryLabel}`,
-          description: cleanExtract(p, txt.tavernaNote),
-          signatureDishes: [foodType, txt.dishes[1]?.name || 'Moussaka', txt.dishes[0]?.name || 'Horiatiki'],
-          atmosphere: atmosphere && atmosphere !== 'any' ? atmosphere : cityLabel,
-          priceLevel: idx === 0 ? '€€' : idx % 2 === 0 ? '€' : '€€€',
-          insiderTip: txt.checkSiteTip,
-          rating: Number((4.9 - idx * 0.1).toFixed(1)),
-          operatingStatus: txt.activeStatusLabel,
-          openingHours: txt.diningHoursLabel,
-          establishedYear: txt.verifiedYearLabel,
-          officialWebsite: sanitizeHttpUrl(p.fullurl),
-          bookingUrl: '',
-          imageUrl: pickPhoto(p),
-          coordinates: extractWikiCoords(p),
-        }));
+      : [];
 
   const hotels =
     webCtx.liveHotels.length > 0
@@ -2529,7 +3087,7 @@ async function buildLiveWikipediaGreeceFallback(params: {
           imageUrl: '',
           coordinates: isValidGreeceCoords(v.lat, v.lng) ? { lat: v.lat!, lng: v.lng! } : undefined,
         }))
-      : (uniqueHotels.length > 0 ? uniqueHotels : geoPages).slice(0, 4).map((p, idx) => ({
+      : uniqueHotels.slice(0, 4).map((p, idx) => ({
           id: `h-${idx + 1}`,
           rank: idx + 1,
           name: p.title,
@@ -3210,6 +3768,7 @@ CRITICAL RULES:
 
   if (Date.now() >= searchGroundingCooldownUntil) {
     const groundedModels = ['gemini-3.1-flash-lite', 'gemini-4-hydrogen'].filter((m) => isModelAvailable(m));
+    let dailyQuotaFails = 0;
     for (const gModel of groundedModels) {
       try {
         const cfg: any = { tools: [{ googleSearch: {} }] };
@@ -3222,7 +3781,7 @@ CRITICAL RULES:
             contents: baseDailyPrompt,
             config: cfg,
           }),
-          7500,
+          9000,
           `daily-grounding-${gModel}`
         );
         rawText = gRes.text || '';
@@ -3239,17 +3798,20 @@ CRITICAL RULES:
         if (rawText.trim()) break;
       } catch (err: any) {
         if (isQuotaError(err)) {
-          searchGroundingCooldownUntil = Date.now() + 10 * 60 * 1000;
-          console.log(`[DAILY GROUNDING QUOTA] ${gModel}:`, err?.message || err);
-          break;
+          dailyQuotaFails += 1;
+          console.log(`[DAILY GROUNDING QUOTA] ${gModel}: Search grounding quota reached, falling back to plain generation.`);
+          continue;
         } else if (isTransientRetryableError(err)) {
           markModelTemporarilyBusy(gModel);
           console.log(`[DAILY GROUNDING BUSY] ${gModel}:`, err?.message || err);
-          break;
+          continue;
         } else {
           console.log(`[DAILY GROUNDING SKIP] ${gModel}:`, err?.message || err);
         }
       }
+    }
+    if (groundedModels.length > 0 && dailyQuotaFails >= groundedModels.length) {
+      searchGroundingCooldownUntil = Date.now() + 3 * 60 * 1000;
     }
   }
 
@@ -3328,7 +3890,8 @@ CRITICAL RULES:
 
   const cityCoord = GREEK_CITY_COORDS[seedDestination] || GREEK_CITY_COORDS['Athens'];
   const livePool = [...liveCtx.liveDining, ...liveCtx.liveHotels, ...liveCtx.liveSites];
-  const usedUrls = new Set<string>();
+  const usedDailyPhotoKeys = new Set<string>();
+  const avoidDailyPhotoKeys = new Set<string>();
 
   const cSite = sanitizeHttpUrl(parsed.culinaryPick.officialWebsite);
   const cBook = sanitizeHttpUrl(parsed.culinaryPick.bookingUrl);
@@ -3337,73 +3900,163 @@ CRITICAL RULES:
   const tSite = sanitizeHttpUrl(parsed.tripPick.officialWebsite);
   const tBook = sanitizeHttpUrl(parsed.tripPick.bookingUrl);
 
-  const [cImg, cCoords, dImg, hImg, hCoords, tImg, tCoords] = await Promise.all([
-    resolveVerifiedPlaceImageWithBudget({
+  const pickLatinRegion = (val?: string) =>
+    val && /[a-z]/i.test(val) ? val : seedDestination;
+  const cRegionEn = pickLatinRegion(parsed.culinaryPick.region);
+  const dRegionEn = pickLatinRegion(parsed.dishPick.regionOfOrigin);
+  const hRegionEn = pickLatinRegion(parsed.hotelPick.region);
+  const tRegionEn = pickLatinRegion(parsed.tripPick.tripCity || parsed.tripPick.region);
+
+  const [cCands, cCoords, dCands, hCands, hCoords, tCands, tCoords] = await Promise.all([
+    collectTier1PhotoCandidatesWithBudget({
       englishName: parsed.culinaryPick.englishName,
       name: parsed.culinaryPick.name,
       greekName: parsed.culinaryPick.greekName,
-      region: parsed.culinaryPick.region || seedDestination,
+      region: cRegionEn,
       officialWebsite: cSite,
       bookingUrl: cBook,
       groundingSources,
       extraContext: 'taverna restaurant',
-      fallbackTopic: 'Greek seaside taverna dining',
-      usedUrls,
     }),
     resolvePlaceCoordinatesWithBudget({
       englishName: parsed.culinaryPick.englishName,
       name: parsed.culinaryPick.name,
-      region: parsed.culinaryPick.region || seedDestination,
+      region: cRegionEn,
       cityCoord,
       livePool,
     }),
-    resolveVerifiedPlaceImageWithBudget({
+    collectTier1PhotoCandidatesWithBudget({
       englishName: parsed.dishPick.englishName,
       name: parsed.dishPick.name,
       greekName: parsed.dishPick.greekName,
+      region: dRegionEn,
       groundingSources,
       extraContext: 'Greek dish food',
       isDish: true,
-      usedUrls,
     }),
-    resolveVerifiedPlaceImageWithBudget({
+    collectTier1PhotoCandidatesWithBudget({
       englishName: parsed.hotelPick.englishName,
       name: parsed.hotelPick.name,
       greekName: parsed.hotelPick.greekName,
-      region: parsed.hotelPick.region || seedDestination,
+      region: hRegionEn,
       officialWebsite: hSite,
       bookingUrl: hBook,
       groundingSources,
       extraContext: 'hotel boutique',
-      fallbackTopic: 'Greek boutique hotel Aegean',
-      usedUrls,
     }),
     resolvePlaceCoordinatesWithBudget({
       englishName: parsed.hotelPick.englishName,
       name: parsed.hotelPick.name,
-      region: parsed.hotelPick.region || seedDestination,
+      region: hRegionEn,
       cityCoord,
       livePool,
     }),
-    resolveVerifiedPlaceImageWithBudget({
+    collectTier1PhotoCandidatesWithBudget({
       englishName: parsed.tripPick.englishName,
       name: parsed.tripPick.title,
       greekName: parsed.tripPick.greekTitle,
-      region: parsed.tripPick.tripCity || parsed.tripPick.region || seedDestination,
+      region: tRegionEn,
       officialWebsite: tSite,
       bookingUrl: tBook,
       groundingSources,
-      fallbackTopic: 'Greece Aegean island landmark scenic',
-      usedUrls,
     }),
     resolvePlaceCoordinatesWithBudget({
       englishName: parsed.tripPick.englishName,
       name: parsed.tripPick.title,
-      region: parsed.tripPick.tripCity || parsed.tripPick.region || seedDestination,
+      region: tRegionEn,
       cityCoord,
       livePool,
     }),
   ]);
+
+  const dailyMissingDescriptors: PhotoResolutionDescriptor[] = [];
+  if (cCands.length === 0) {
+    dailyMissingDescriptors.push({
+      uidKey: 'daily-c',
+      kind: 'taverna',
+      name: parsed.culinaryPick.name,
+      englishName: parsed.culinaryPick.englishName,
+      greekName: parsed.culinaryPick.greekName,
+      region: cRegionEn,
+      officialWebsite: cSite,
+      bookingUrl: cBook,
+      extraContext: 'taverna restaurant',
+      isDish: false,
+    });
+  }
+  if (dCands.length === 0) {
+    dailyMissingDescriptors.push({
+      uidKey: 'daily-d',
+      kind: 'dish',
+      name: parsed.dishPick.name,
+      englishName: parsed.dishPick.englishName,
+      greekName: parsed.dishPick.greekName,
+      region: dRegionEn,
+      officialWebsite: '',
+      bookingUrl: '',
+      extraContext: 'Greek dish food',
+      isDish: true,
+    });
+  }
+  if (hCands.length === 0) {
+    dailyMissingDescriptors.push({
+      uidKey: 'daily-h',
+      kind: 'hotel',
+      name: parsed.hotelPick.name,
+      englishName: parsed.hotelPick.englishName,
+      greekName: parsed.hotelPick.greekName,
+      region: hRegionEn,
+      officialWebsite: hSite,
+      bookingUrl: hBook,
+      extraContext: 'hotel boutique',
+      isDish: false,
+    });
+  }
+  if (tCands.length === 0) {
+    dailyMissingDescriptors.push({
+      uidKey: 'daily-t',
+      kind: 'gem',
+      name: parsed.tripPick.title,
+      englishName: parsed.tripPick.englishName,
+      greekName: parsed.tripPick.greekTitle,
+      region: tRegionEn,
+      officialWebsite: tSite,
+      bookingUrl: tBook,
+      extraContext: 'landmark excursion',
+      isDish: false,
+    });
+  }
+
+  const dailyGeminiPhotos =
+    dailyMissingDescriptors.length > 0
+      ? await resolveMissingPhotosWithGemini({
+          ai,
+          items: dailyMissingDescriptors,
+          targetCity: seedDestination,
+          groundingSources,
+        })
+      : new Map<string, { candidates: string[]; officialUrl?: string }>();
+
+  const cImg = claimUniquePhotoFromCandidates(
+    [...cCands, ...(dailyGeminiPhotos.get('daily-c')?.candidates || [])],
+    usedDailyPhotoKeys,
+    avoidDailyPhotoKeys
+  );
+  const dImg = claimUniquePhotoFromCandidates(
+    [...dCands, ...(dailyGeminiPhotos.get('daily-d')?.candidates || [])],
+    usedDailyPhotoKeys,
+    avoidDailyPhotoKeys
+  );
+  const hImg = claimUniquePhotoFromCandidates(
+    [...hCands, ...(dailyGeminiPhotos.get('daily-h')?.candidates || [])],
+    usedDailyPhotoKeys,
+    avoidDailyPhotoKeys
+  );
+  const tImg = claimUniquePhotoFromCandidates(
+    [...tCands, ...(dailyGeminiPhotos.get('daily-t')?.candidates || [])],
+    usedDailyPhotoKeys,
+    avoidDailyPhotoKeys
+  );
 
   const payload = {
     dateKey,
@@ -3458,13 +4111,14 @@ CRITICAL RULES:
   return res.json(payload);
 });
 
-// Real Live Google-Search Grounded AI Recommendation Endpoint (Requires Admin-Approved Subscriber, Admin, or Active VIP Code)
+// Real Live Google-Search Grounded AI Recommendation Endpoint (Admin, Approved VIP, or 2 Free Trials)
 app.post('/api/recommend', aiRecommendLimiter, requireSameOriginOrHeader, async (req: Request, res: Response) => {
-  const access = await resolvePaidFeatureAccess(req);
+  const access = await resolvePaidFeatureAccess(req, 'recommend');
   if (!access.allowed) {
     return res.status(access.status || 403).json({
       error: access.error,
       approvalRequired: true,
+      trialExhausted: Boolean(access.trialExhausted),
       approvalStatus: access.approvalStatus || 'pending',
     });
   }
@@ -3536,12 +4190,39 @@ app.post('/api/recommend', aiRecommendLimiter, requireSameOriginOrHeader, async 
     langName,
   });
 
+  const recentPhotoUrlsRaw: string[] = Array.isArray(req.body?.recentPhotoUrls)
+    ? req.body.recentPhotoUrls.slice(0, 100).map((u: any) => String(u || '').trim()).filter(Boolean)
+    : [];
+  const clientAvoidPhotoKeys = new Set<string>(
+    recentPhotoUrlsRaw.map((u) => canonicalPhotoKey(u)).filter(Boolean)
+  );
+
   const cachedRecommend = getFromTtlCache(serverRecommendCache, recommendCacheKey);
   if (cachedRecommend) {
+    // Enforce zero duplicate / zero previously-shown photos even on cache hits
+    const seenKeys = new Set<string>();
+    const scrubUniquePhotos = (arr: any[] = []) =>
+      arr.map((item) => {
+        const img = String(item?.imageUrl || '').trim();
+        const key = canonicalPhotoKey(img);
+        if (!img || !key || seenKeys.has(key) || clientAvoidPhotoKeys.has(key)) {
+          return { ...item, imageUrl: '' };
+        }
+        seenKeys.add(key);
+        return item;
+      });
+    const dedupedCached = {
+      ...cachedRecommend,
+      tavernas: scrubUniquePhotos(cachedRecommend.tavernas),
+      hotels: scrubUniquePhotos(cachedRecommend.hotels),
+      archaeologicalSites: scrubUniquePhotos(cachedRecommend.archaeologicalSites),
+      dishes: scrubUniquePhotos(cachedRecommend.dishes),
+      hiddenGems: scrubUniquePhotos(cachedRecommend.hiddenGems),
+    };
     if (activeSession) {
       const updatedUser = consumeGuestSearchQuota(req, res, activeSession);
       return res.json({
-        ...cachedRecommend,
+        ...dedupedCached,
         searchedAt: now.toISOString(),
         sessionMeta: {
           user: updatedUser,
@@ -3549,13 +4230,14 @@ app.post('/api/recommend', aiRecommendLimiter, requireSameOriginOrHeader, async 
       });
     }
     return res.json({
-      ...cachedRecommend,
+      ...dedupedCached,
       searchedAt: now.toISOString(),
     });
   }
 
   const apiKey = process.env.GEMINI_API_KEY;
   const recommendStartMs = Date.now();
+  const geminiClient = apiKey ? createServerGeminiClient(apiKey, 'v1beta', 24000) : null;
 
   try {
     let rawText = '';
@@ -3565,8 +4247,8 @@ app.post('/api/recommend', aiRecommendLimiter, requireSameOriginOrHeader, async 
     let liveOsmPool: LiveOsmVenue[] = [];
     const targetCityCoord = GREEK_CITY_COORDS[targetCity] || GREEK_CITY_COORDS['Athens'];
 
-    if (apiKey) {
-      const ai = createServerGeminiClient(apiKey, 'v1beta', 24000);
+    if (geminiClient) {
+      const ai = geminiClient;
 
       // Gather real live OpenStreetMap + Wikivoyage web directory facts concurrently (~1s)
       const liveWebContextPromise = gatherLiveWebGrounding({
@@ -3613,6 +4295,7 @@ CRITICAL RULES:
 
       if (Date.now() >= searchGroundingCooldownUntil) {
         const groundedModels = ['gemini-3.1-flash-lite', 'gemini-4-hydrogen'].filter((m) => isModelAvailable(m));
+        let recQuotaFails = 0;
         for (const gModel of groundedModels) {
           try {
             const groundedConfig: any = {
@@ -3650,15 +4333,18 @@ CRITICAL RULES:
             if (rawText.trim()) break;
           } catch (searchErr: any) {
             if (isQuotaError(searchErr)) {
-              searchGroundingCooldownUntil = Date.now() + 10 * 60 * 1000;
-              console.log(`Google Search grounding quota reached for ${gModel}; using live directory + AI.`);
-              break;
+              recQuotaFails += 1;
+              console.log(`Google Search grounding quota reached for ${gModel}; continuing fallback.`);
+              continue;
             } else if (isTransientRetryableError(searchErr)) {
               markModelTemporarilyBusy(gModel);
               console.log(`Google Search grounding busy for ${gModel}; switching model.`);
               continue;
             }
           }
+        }
+        if (groundedModels.length > 0 && recQuotaFails >= groundedModels.length) {
+          searchGroundingCooldownUntil = Date.now() + 3 * 60 * 1000;
         }
       }
 
@@ -3789,207 +4475,256 @@ CRITICAL RULES:
     const rawDishes = sortByRankThenRating(parsedData.dishes || []);
     const rawGems = sortByRankThenRating(parsedData.hiddenGems || []);
 
-    // Resolve ONLY real, verified place-specific & live web photographs + coordinates concurrently
-    const usedImageUrls = new Set<string>();
-    const [tavernas, hotels, archaeologicalSites, dishes, hiddenGems] = await Promise.all([
+    // Resolve ONLY real, verified place-specific & dish-specific photographs (Tier 1 + Gemini Search Grounding) + coordinates
+    const rawItemsForPhotos: PhotoResolutionDescriptor[] = [
+      ...rawTavernas.map((t: any, idx: number) => ({
+        uidKey: `t-${idx}`,
+        kind: 'taverna' as const,
+        name: String(t.name || ''),
+        englishName: String(t.englishName || t.name || ''),
+        greekName: String(t.greekName || ''),
+        region: targetCity,
+        officialWebsite: sanitizeHttpUrl(t.officialWebsite),
+        bookingUrl: sanitizeHttpUrl(t.bookingUrl),
+        extraContext: 'taverna restaurant',
+        isDish: false,
+        preExistingUrl: t.imageUrl && isCleanPhotoUrl(t.imageUrl) ? String(t.imageUrl) : '',
+      })),
+      ...rawHotels.map((h: any, idx: number) => ({
+        uidKey: `h-${idx}`,
+        kind: 'hotel' as const,
+        name: String(h.name || ''),
+        englishName: String(h.englishName || h.name || ''),
+        greekName: String(h.greekName || ''),
+        region: targetCity,
+        officialWebsite: sanitizeHttpUrl(h.officialWebsite),
+        bookingUrl: sanitizeHttpUrl(h.bookingUrl),
+        extraContext: 'hotel boutique',
+        isDish: false,
+        preExistingUrl: h.imageUrl && isCleanPhotoUrl(h.imageUrl) ? String(h.imageUrl) : '',
+      })),
+      ...rawSites.map((a: any, idx: number) => ({
+        uidKey: `a-${idx}`,
+        kind: 'site' as const,
+        name: String(a.name || ''),
+        englishName: String(a.englishName || a.name || ''),
+        greekName: String(a.greekName || ''),
+        region: targetCity,
+        officialWebsite: sanitizeHttpUrl(a.officialWebsite),
+        bookingUrl: sanitizeHttpUrl(a.bookingUrl),
+        extraContext: 'archaeological site',
+        isDish: false,
+        preExistingUrl: a.imageUrl && isCleanPhotoUrl(a.imageUrl) ? String(a.imageUrl) : '',
+      })),
+      ...rawDishes.map((d: any, idx: number) => ({
+        uidKey: `d-${idx}`,
+        kind: 'dish' as const,
+        name: String(d.name || ''),
+        englishName: String(d.englishName || d.name || ''),
+        greekName: String(d.greekName || ''),
+        region: String(d.regionOfOrigin || ''),
+        officialWebsite: '',
+        bookingUrl: '',
+        extraContext: 'Greek dish food',
+        isDish: true,
+        preExistingUrl: d.imageUrl && isCleanPhotoUrl(d.imageUrl) ? String(d.imageUrl) : '',
+      })),
+      ...rawGems.map((g: any, idx: number) => ({
+        uidKey: `g-${idx}`,
+        kind: 'gem' as const,
+        name: String(g.title || ''),
+        englishName: String(g.englishName || g.title || ''),
+        greekName: String(g.greekTitle || ''),
+        region: targetCity,
+        officialWebsite: sanitizeHttpUrl(g.officialWebsite),
+        bookingUrl: sanitizeHttpUrl(g.bookingUrl),
+        extraContext: 'scenic landmark',
+        isDish: false,
+        preExistingUrl: g.imageUrl && isCleanPhotoUrl(g.imageUrl) ? String(g.imageUrl) : '',
+      })),
+    ];
+
+    // Step A: Collect Tier-1 candidates & Coordinates concurrently across all items
+    const [tier1Lists, tavernaCoordsList, hotelCoordsList, siteCoordsList, gemCoordsList] = await Promise.all([
       Promise.all(
-        rawTavernas.map(async (t: any, idx: number) => {
-          const officialWebsite = sanitizeHttpUrl(t.officialWebsite);
-          const bookingUrl = sanitizeHttpUrl(t.bookingUrl);
-          const existingCoords = isValidGreeceCoords(t.coordinates?.lat, t.coordinates?.lng)
-            ? t.coordinates
-            : undefined;
-          const [imageUrl, coordinates] = await Promise.all([
-            t.imageUrl && isCleanPhotoUrl(t.imageUrl)
-              ? Promise.resolve(t.imageUrl)
-              : resolveVerifiedPlaceImageWithBudget({
-                  englishName: t.englishName,
-                  name: t.name,
-                  greekName: t.greekName,
-                  region: targetCity,
-                  officialWebsite,
-                  bookingUrl,
-                  groundingSources,
-                  extraContext: 'taverna restaurant',
-                  fallbackTopic: idx % 2 === 0 ? 'Greek taverna seafood restaurant' : 'Greek outdoor dining meze',
-                  usedUrls: usedImageUrls,
-                }),
-            existingCoords
-              ? Promise.resolve(existingCoords)
-              : resolvePlaceCoordinatesWithBudget({
-                  englishName: t.englishName,
-                  name: t.name,
-                  region: t.region || targetCity,
-                  cityCoord: targetCityCoord,
-                  livePool: liveOsmPool,
-                }),
-          ]);
-          return {
-            ...t,
-            id: t.id || `t-${idx + 1}`,
-            rank: idx + 1,
-            priceLevel: t.priceLevel === '€' || t.priceLevel === '€€€' ? t.priceLevel : '€€',
-            rating: typeof t.rating === 'number' ? t.rating : 4.8,
-            officialWebsite,
-            bookingUrl,
-            imageUrl,
-            coordinates,
-          };
-        })
+        rawItemsForPhotos.map((desc) =>
+          desc.preExistingUrl
+            ? Promise.resolve([desc.preExistingUrl])
+            : collectTier1PhotoCandidatesWithBudget({
+                englishName: desc.englishName,
+                name: desc.name,
+                greekName: desc.greekName,
+                region: desc.region,
+                officialWebsite: desc.officialWebsite,
+                bookingUrl: desc.bookingUrl,
+                groundingSources,
+                extraContext: desc.extraContext,
+                isDish: desc.isDish,
+              })
+        )
       ),
       Promise.all(
-        rawHotels.map(async (h: any, idx: number) => {
-          const officialWebsite = sanitizeHttpUrl(h.officialWebsite);
-          const bookingUrl = sanitizeHttpUrl(h.bookingUrl);
-          const existingCoords = isValidGreeceCoords(h.coordinates?.lat, h.coordinates?.lng)
-            ? h.coordinates
-            : undefined;
-          const [imageUrl, coordinates] = await Promise.all([
-            h.imageUrl && isCleanPhotoUrl(h.imageUrl)
-              ? Promise.resolve(h.imageUrl)
-              : resolveVerifiedPlaceImageWithBudget({
-                  englishName: h.englishName,
-                  name: h.name,
-                  greekName: h.greekName,
-                  region: targetCity,
-                  officialWebsite,
-                  bookingUrl,
-                  groundingSources,
-                  extraContext: 'hotel',
-                  fallbackTopic: idx % 2 === 0 ? 'boutique hotel sea view' : 'Greek resort terrace pool',
-                  usedUrls: usedImageUrls,
-                }),
-            existingCoords
-              ? Promise.resolve(existingCoords)
-              : resolvePlaceCoordinatesWithBudget({
-                  englishName: h.englishName,
-                  name: h.name,
-                  region: h.region || targetCity,
-                  cityCoord: targetCityCoord,
-                  livePool: liveOsmPool,
-                }),
-          ]);
-          return {
-            ...h,
-            id: h.id || `h-${idx + 1}`,
-            rank: idx + 1,
-            priceLevel: h.priceLevel === '€' || h.priceLevel === '€€€' ? h.priceLevel : '€€',
-            rating: typeof h.rating === 'number' ? h.rating : 4.7,
-            officialWebsite,
-            bookingUrl,
-            imageUrl,
-            coordinates,
-          };
-        })
+        rawTavernas.map((t: any) =>
+          isValidGreeceCoords(t.coordinates?.lat, t.coordinates?.lng)
+            ? Promise.resolve(t.coordinates)
+            : resolvePlaceCoordinatesWithBudget({
+                englishName: t.englishName,
+                name: t.name,
+                region: t.region || targetCity,
+                cityCoord: targetCityCoord,
+                livePool: liveOsmPool,
+              })
+        )
       ),
       Promise.all(
-        rawSites.map(async (a: any, idx: number) => {
-          const officialWebsite = sanitizeHttpUrl(a.officialWebsite);
-          const bookingUrl = sanitizeHttpUrl(a.bookingUrl);
-          const existingCoords = isValidGreeceCoords(a.coordinates?.lat, a.coordinates?.lng)
-            ? a.coordinates
-            : undefined;
-          const [imageUrl, coordinates] = await Promise.all([
-            a.imageUrl && isCleanPhotoUrl(a.imageUrl)
-              ? Promise.resolve(a.imageUrl)
-              : resolveVerifiedPlaceImageWithBudget({
-                  englishName: a.englishName,
-                  name: a.name,
-                  greekName: a.greekName,
-                  region: targetCity,
-                  officialWebsite,
-                  bookingUrl,
-                  groundingSources,
-                  extraContext: 'archaeological site',
-                  fallbackTopic: 'ancient Greek temple ruins monument',
-                  usedUrls: usedImageUrls,
-                }),
-            existingCoords
-              ? Promise.resolve(existingCoords)
-              : resolvePlaceCoordinatesWithBudget({
-                  englishName: a.englishName,
-                  name: a.name,
-                  region: a.region || targetCity,
-                  cityCoord: targetCityCoord,
-                  livePool: liveOsmPool,
-                }),
-          ]);
-          return {
-            ...a,
-            id: a.id || `a-${idx + 1}`,
-            rank: idx + 1,
-            officialWebsite,
-            bookingUrl,
-            imageUrl,
-            coordinates,
-          };
-        })
+        rawHotels.map((h: any) =>
+          isValidGreeceCoords(h.coordinates?.lat, h.coordinates?.lng)
+            ? Promise.resolve(h.coordinates)
+            : resolvePlaceCoordinatesWithBudget({
+                englishName: h.englishName,
+                name: h.name,
+                region: h.region || targetCity,
+                cityCoord: targetCityCoord,
+                livePool: liveOsmPool,
+              })
+        )
       ),
       Promise.all(
-        rawDishes.map(async (d: any, idx: number) => {
-          const imageUrl =
-            d.imageUrl && isCleanPhotoUrl(d.imageUrl)
-              ? d.imageUrl
-              : await resolveVerifiedPlaceImageWithBudget({
-                  englishName: d.englishName,
-                  name: d.name,
-                  greekName: d.greekName,
-                  groundingSources,
-                  extraContext: 'Greek dish food',
-                  isDish: true,
-                  usedUrls: usedImageUrls,
-                });
-          return {
-            ...d,
-            id: d.id || `d-${idx + 1}`,
-            rank: idx + 1,
-            imageUrl,
-          };
-        })
+        rawSites.map((a: any) =>
+          isValidGreeceCoords(a.coordinates?.lat, a.coordinates?.lng)
+            ? Promise.resolve(a.coordinates)
+            : resolvePlaceCoordinatesWithBudget({
+                englishName: a.englishName,
+                name: a.name,
+                region: a.region || targetCity,
+                cityCoord: targetCityCoord,
+                livePool: liveOsmPool,
+              })
+        )
       ),
       Promise.all(
-        rawGems.map(async (g: any, idx: number) => {
-          const officialWebsite = sanitizeHttpUrl(g.officialWebsite);
-          const bookingUrl = sanitizeHttpUrl(g.bookingUrl);
-          const existingCoords = isValidGreeceCoords(g.coordinates?.lat, g.coordinates?.lng)
-            ? g.coordinates
-            : undefined;
-          const [imageUrl, coordinates] = await Promise.all([
-            g.imageUrl && isCleanPhotoUrl(g.imageUrl)
-              ? Promise.resolve(g.imageUrl)
-              : resolveVerifiedPlaceImageWithBudget({
-                  englishName: g.englishName,
-                  name: g.title,
-                  greekName: g.greekTitle,
-                  region: targetCity,
-                  officialWebsite,
-                  bookingUrl,
-                  groundingSources,
-                  fallbackTopic: 'Aegean sunset coastal bay scenic',
-                  usedUrls: usedImageUrls,
-                }),
-            existingCoords
-              ? Promise.resolve(existingCoords)
-              : resolvePlaceCoordinatesWithBudget({
-                  englishName: g.englishName,
-                  name: g.title,
-                  region: g.region || targetCity,
-                  cityCoord: targetCityCoord,
-                  livePool: liveOsmPool,
-                }),
-          ]);
-          return {
-            ...g,
-            id: g.id || `g-${idx + 1}`,
-            rank: idx + 1,
-            officialWebsite,
-            bookingUrl,
-            imageUrl,
-            coordinates,
-          };
-        })
+        rawGems.map((g: any) =>
+          isValidGreeceCoords(g.coordinates?.lat, g.coordinates?.lng)
+            ? Promise.resolve(g.coordinates)
+            : resolvePlaceCoordinatesWithBudget({
+                englishName: g.englishName,
+                name: g.title,
+                region: g.region || targetCity,
+                cityCoord: targetCityCoord,
+                livePool: liveOsmPool,
+              })
+        )
       ),
     ]);
+
+    // Step B: For any items that still have NO valid unused photo candidate, let Gemini Google Search Grounding locate real pages & photos
+    const tier1ByKey = new Map<string, string[]>();
+    const itemsNeedingGeminiPhoto: PhotoResolutionDescriptor[] = [];
+    rawItemsForPhotos.forEach((desc, i) => {
+      const cands = tier1Lists[i] || [];
+      tier1ByKey.set(desc.uidKey, cands);
+      const hasUnused = cands.some((u) => {
+        const k = canonicalPhotoKey(u);
+        return k && !clientAvoidPhotoKeys.has(k);
+      });
+      if (!hasUnused) {
+        itemsNeedingGeminiPhoto.push(desc);
+      }
+    });
+
+    const geminiPhotoMap =
+      itemsNeedingGeminiPhoto.length > 0 && geminiClient
+        ? await resolveMissingPhotosWithGemini({
+            ai: geminiClient,
+            items: itemsNeedingGeminiPhoto,
+            targetCity,
+            groundingSources,
+          })
+        : new Map<string, { candidates: string[]; officialUrl?: string }>();
+
+    // Step C: Atomically assign strictly unique real photos (zero duplicates within result OR against previous session photos)
+    const usedImageKeys = new Set<string>();
+    const pickUniqueForKey = (uidKey: string): { imageUrl: string; discoveredSite?: string } => {
+      const t1 = tier1ByKey.get(uidKey) || [];
+      const gem = geminiPhotoMap.get(uidKey);
+      const combined = [...t1, ...(gem?.candidates || [])];
+      const imageUrl = claimUniquePhotoFromCandidates(combined, usedImageKeys, clientAvoidPhotoKeys);
+      return { imageUrl, discoveredSite: gem?.officialUrl };
+    };
+
+    const tavernas = rawTavernas.map((t: any, idx: number) => {
+      const { imageUrl, discoveredSite } = pickUniqueForKey(`t-${idx}`);
+      const officialWebsite = sanitizeHttpUrl(t.officialWebsite) || discoveredSite || '';
+      const bookingUrl = sanitizeHttpUrl(t.bookingUrl);
+      return {
+        ...t,
+        id: t.id || `t-${idx + 1}`,
+        rank: idx + 1,
+        priceLevel: t.priceLevel === '€' || t.priceLevel === '€€€' ? t.priceLevel : '€€',
+        rating: typeof t.rating === 'number' ? t.rating : 4.8,
+        officialWebsite,
+        bookingUrl,
+        imageUrl,
+        coordinates: tavernaCoordsList[idx],
+      };
+    });
+
+    const hotels = rawHotels.map((h: any, idx: number) => {
+      const { imageUrl, discoveredSite } = pickUniqueForKey(`h-${idx}`);
+      const officialWebsite = sanitizeHttpUrl(h.officialWebsite) || discoveredSite || '';
+      const bookingUrl = sanitizeHttpUrl(h.bookingUrl);
+      return {
+        ...h,
+        id: h.id || `h-${idx + 1}`,
+        rank: idx + 1,
+        priceLevel: h.priceLevel === '€' || h.priceLevel === '€€€' ? h.priceLevel : '€€',
+        rating: typeof h.rating === 'number' ? h.rating : 4.7,
+        officialWebsite,
+        bookingUrl,
+        imageUrl,
+        coordinates: hotelCoordsList[idx],
+      };
+    });
+
+    const archaeologicalSites = rawSites.map((a: any, idx: number) => {
+      const { imageUrl, discoveredSite } = pickUniqueForKey(`a-${idx}`);
+      const officialWebsite = sanitizeHttpUrl(a.officialWebsite) || discoveredSite || '';
+      const bookingUrl = sanitizeHttpUrl(a.bookingUrl);
+      return {
+        ...a,
+        id: a.id || `a-${idx + 1}`,
+        rank: idx + 1,
+        officialWebsite,
+        bookingUrl,
+        imageUrl,
+        coordinates: siteCoordsList[idx],
+      };
+    });
+
+    const dishes = rawDishes.map((d: any, idx: number) => {
+      const { imageUrl } = pickUniqueForKey(`d-${idx}`);
+      return {
+        ...d,
+        id: d.id || `d-${idx + 1}`,
+        rank: idx + 1,
+        imageUrl,
+      };
+    });
+
+    const hiddenGems = rawGems.map((g: any, idx: number) => {
+      const { imageUrl, discoveredSite } = pickUniqueForKey(`g-${idx}`);
+      const officialWebsite = sanitizeHttpUrl(g.officialWebsite) || discoveredSite || '';
+      const bookingUrl = sanitizeHttpUrl(g.bookingUrl);
+      return {
+        ...g,
+        id: g.id || `g-${idx + 1}`,
+        rank: idx + 1,
+        officialWebsite,
+        bookingUrl,
+        imageUrl,
+        coordinates: gemCoordsList[idx],
+      };
+    });
 
     const responsePayload = {
       ...parsedData,
@@ -4012,17 +4747,23 @@ CRITICAL RULES:
       80
     );
 
+    const trialRemainingAfter = access.consumeTrial ? access.consumeTrial() : undefined;
+
     if (activeSession) {
       const updatedUser = consumeGuestSearchQuota(req, res, activeSession);
       return res.json({
         ...responsePayload,
+        ...(trialRemainingAfter !== undefined ? { trialInfo: { searchesRemaining: trialRemainingAfter } } : {}),
         sessionMeta: {
           user: updatedUser,
         },
       });
     }
 
-    return res.json(responsePayload);
+    return res.json({
+      ...responsePayload,
+      ...(trialRemainingAfter !== undefined ? { trialInfo: { searchesRemaining: trialRemainingAfter } } : {}),
+    });
   } catch (err: any) {
     console.error('[RECOMMEND ERROR]', err);
     return res.status(500).json({
@@ -4178,13 +4919,14 @@ app.post('/api/translate', translatorLimiter, async (req: Request, res: Response
   }
 });
 
-// VIP 3-Day Greece Itinerary Generator Endpoint
+// VIP 3-Day Greece Itinerary Generator Endpoint (Requires Paid Subscription or Admin)
 app.post('/api/itinerary', aiRecommendLimiter, requireSameOriginOrHeader, async (req: Request, res: Response) => {
-  const access = await resolvePaidFeatureAccess(req);
+  const access = await resolvePaidFeatureAccess(req, 'itinerary');
   if (!access.allowed) {
     return res.status(access.status || 403).json({
       error: access.error,
       approvalRequired: true,
+      subscriptionRequired: true,
       approvalStatus: access.approvalStatus || 'pending',
     });
   }
@@ -4366,13 +5108,14 @@ function createServerGeminiClient(apiKey: string, apiVersion: string = 'v1beta',
   });
 }
 
-// 1. Live Camera Vision Translator for Greek Menus, Street Signs & Notices
+// 1. Live Camera Vision Translator for Greek Menus, Street Signs & Notices (Admin, Approved VIP, or 2 Free Trials)
 app.post('/api/vision-translate', translatorLimiter, requireSameOriginOrHeader, async (req: Request, res: Response) => {
-  const access = await resolvePaidFeatureAccess(req);
+  const access = await resolvePaidFeatureAccess(req, 'translator');
   if (!access.allowed) {
     return res.status(access.status || 403).json({
       error: access.error,
       approvalRequired: true,
+      trialExhausted: Boolean(access.trialExhausted),
       approvalStatus: access.approvalStatus || 'pending',
     });
   }
@@ -4468,6 +5211,7 @@ RULES:
         );
 
         const parsed = extractAndParseJSON(response.text || '{}');
+        const trialRemainingAfter = access.consumeTrial ? access.consumeTrial() : undefined;
         return res.json({
           result: {
             detectedCategory: parsed.detectedCategory || mode || 'general',
@@ -4480,6 +5224,7 @@ RULES:
             replyPhraseTranslation: parsed.replyPhraseTranslation || '',
           },
           modelUsed: model,
+          ...(trialRemainingAfter !== undefined ? { trialInfo: { searchesRemaining: trialRemainingAfter } } : {}),
         });
       } catch (err: any) {
         lastErr = err;
@@ -4510,13 +5255,14 @@ RULES:
   });
 });
 
-// 2. Real-Time Two-Way Voice Transcription + Translation
+// 2. Real-Time Two-Way Voice Transcription + Translation (Admin, Approved VIP, or 2 Free Trials)
 app.post('/api/voice-translate', translatorLimiter, requireSameOriginOrHeader, async (req: Request, res: Response) => {
-  const access = await resolvePaidFeatureAccess(req);
+  const access = await resolvePaidFeatureAccess(req, 'translator');
   if (!access.allowed) {
     return res.status(access.status || 403).json({
       error: access.error,
       approvalRequired: true,
+      trialExhausted: Boolean(access.trialExhausted),
       approvalStatus: access.approvalStatus || 'pending',
     });
   }
@@ -4604,6 +5350,7 @@ CRITICAL: If no clear human speech is heard, set "transcript" to "" and "transla
             error: 'No clear speech was detected. Please speak closer to the microphone and try again.',
           });
         }
+        const trialRemainingAfter = access.consumeTrial ? access.consumeTrial() : undefined;
         return res.json({
           result: {
             transcript: parsedDirect.transcript.trim(),
@@ -4612,6 +5359,7 @@ CRITICAL: If no clear human speech is heard, set "transcript" to "" and "transla
             greekPhonetic: parsedDirect.greekPhonetic || '',
             culturalTip: parsedDirect.culturalTip || '',
           },
+          ...(trialRemainingAfter !== undefined ? { trialInfo: { searchesRemaining: trialRemainingAfter } } : {}),
         });
       } catch (err: any) {
         audioErr = err;
@@ -4676,6 +5424,7 @@ CRITICAL: If no clear human speech is heard, set "transcript" to "" and "transla
             error: 'No clear speech was detected. Please speak closer to the microphone and try again.',
           });
         }
+        const trialRemainingAfter = access.consumeTrial ? access.consumeTrial() : undefined;
         return res.json({
           result: {
             transcript: parsedDirect.transcript.trim(),
@@ -4684,6 +5433,7 @@ CRITICAL: If no clear human speech is heard, set "transcript" to "" and "transla
             greekPhonetic: parsedDirect.greekPhonetic || '',
             culturalTip: parsedDirect.culturalTip || '',
           },
+          ...(trialRemainingAfter !== undefined ? { trialInfo: { searchesRemaining: trialRemainingAfter } } : {}),
         });
       } catch (err: any) {
         audioErr = err;
@@ -4724,6 +5474,7 @@ Requirements:
     });
 
     const parsed = extractAndParseJSON(translationResult.text || '{}');
+    const trialRemainingAfter = access.consumeTrial ? access.consumeTrial() : undefined;
     return res.json({
       result: {
         transcript: parsed.transcript || rawTranscript,
@@ -4732,6 +5483,7 @@ Requirements:
         greekPhonetic: parsed.greekPhonetic || '',
         culturalTip: parsed.culturalTip || '',
       },
+      ...(trialRemainingAfter !== undefined ? { trialInfo: { searchesRemaining: trialRemainingAfter } } : {}),
     });
   } catch (err: any) {
     const stepBStatus = isQuotaError(err) ? 429 : isTransientRetryableError(err) ? 503 : 500;
@@ -4777,11 +5529,12 @@ function ensureWavBase64(base64Data: string, mimeType?: string): string {
 
 // 3. Gemini 3.8 Neural Text-to-Speech (returns WAV audio/wav base64)
 app.post('/api/tts', translatorLimiter, requireSameOriginOrHeader, async (req: Request, res: Response) => {
-  const access = await resolvePaidFeatureAccess(req);
+  const access = await resolvePaidFeatureAccess(req, 'tts');
   if (!access.allowed) {
     return res.status(access.status || 403).json({
       error: access.error,
       approvalRequired: true,
+      trialExhausted: Boolean(access.trialExhausted),
       approvalStatus: access.approvalStatus || 'pending',
     });
   }
@@ -5027,11 +5780,11 @@ app.get('/mobile-auth', (req: Request, res: Response) => {
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
   <title>AEGEA — ${isAr ? 'تسجيل الدخول عبر Google' : 'Google Sign-In'}</title>
   <style>
-    body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;background:#0f172a;color:#f8fafc;font-family:system-ui,-apple-system,sans-serif}
-    .card{width:100%;max-width:400px;background:#1e293b;border:1px solid #334155;border-radius:18px;padding:28px;text-align:center;box-shadow:0 20px 45px rgba(0,0,0,.4)}
-    .brand{font-size:22px;font-weight:800;letter-spacing:.04em;color:#38bdf8;margin:0 0 6px}
+    body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;background:#061325;color:#f8fafc;font-family:system-ui,-apple-system,sans-serif}
+    .card{width:100%;max-width:400px;background:#0B1D36;border:1px solid #163256;border-radius:18px;padding:28px;text-align:center;box-shadow:0 20px 45px rgba(0,0,0,.45)}
+    .brand{font-size:22px;font-weight:800;letter-spacing:.04em;color:#ffffff;margin:0 0 6px}
     .sub{font-size:13px;color:#cbd5e1;margin:0 0 22px;line-height:1.55}
-    .btn{width:100%;padding:14px 18px;border:0;border-radius:12px;background:#0284c7;color:#fff;font-size:15px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:10px;text-decoration:none;box-sizing:border-box}
+    .btn{width:100%;padding:14px 18px;border:0;border-radius:12px;background:#0D5EAF;color:#fff;font-size:15px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:10px;text-decoration:none;box-sizing:border-box}
     .btn:disabled{opacity:.6}
     .btn-return{background:#059669;margin-top:14px;display:none}
     .msg{margin-top:16px;font-size:13px;color:#cbd5e1;line-height:1.5;word-break:break-word}

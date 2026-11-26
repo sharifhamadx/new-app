@@ -37,7 +37,6 @@ googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 export const ADMIN_EMAILS = [
   'sharifhamadx122@gmail.com',
-  'sharifhamadmoko@gmail.com',
 ] as const;
 
 export function isAdminEmail(email?: string | null): boolean {
@@ -145,13 +144,25 @@ function mapDocToUserRecord(id: string, data: Record<string, any>): FirestoreUse
 }
 
 export function mapRecordToAppUser(rec: FirestoreUserRecord, emailVerified: boolean): User {
-  const adminMatch = isAdminEmail(rec.email) && emailVerified;
+  const cleanEmail = rec.email.trim().toLowerCase();
+  const adminMatch = isAdminEmail(cleanEmail) && emailVerified;
   const expired =
     Boolean(rec.subscriptionExpiresAt) &&
     Number.isFinite(Date.parse(rec.subscriptionExpiresAt)) &&
     Date.now() > Date.parse(rec.subscriptionExpiresAt);
 
-  const effectivelyApproved = adminMatch || (rec.approvalStatus === 'approved' && !expired);
+  const isLegacySelfApproved =
+    !adminMatch &&
+    (rec.approvedBy.trim().toLowerCase() === cleanEmail ||
+      rec.paymentNote.trim() === 'Site Administrator');
+
+  const effectivelyApproved =
+    adminMatch ||
+    (rec.approvalStatus === 'approved' && rec.isPremium && !expired && !isLegacySelfApproved);
+
+  const rawTrials = Number.isFinite(Number(rec.searchesRemaining)) ? Number(rec.searchesRemaining) : 2;
+  const boundedTrials =
+    rec.approvalStatus === 'rejected' ? 0 : Math.max(0, Math.min(2, Math.floor(rawTrials)));
 
   return {
     uid: rec.uid,
@@ -160,19 +171,27 @@ export function mapRecordToAppUser(rec: FirestoreUserRecord, emailVerified: bool
     avatar:
       rec.photoURL ||
       `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(rec.displayName || rec.email)}&backgroundColor=0D5EAF`,
-    searchesRemaining: adminMatch || effectivelyApproved ? 999999 : 0,
-    isPremium: adminMatch || (effectivelyApproved && rec.isPremium),
+    searchesRemaining: adminMatch || effectivelyApproved ? 999999 : isLegacySelfApproved ? 2 : boundedTrials,
+    isPremium: effectivelyApproved,
     termsAccepted: rec.termsAccepted,
     isAdmin: adminMatch,
     isGuest: false,
     emailVerified,
-    approvalStatus: adminMatch ? 'approved' : expired ? 'pending' : rec.approvalStatus,
+    approvalStatus: adminMatch
+      ? 'approved'
+      : expired || isLegacySelfApproved
+      ? 'pending'
+      : rec.approvalStatus,
     requestedPlan: rec.requestedPlan,
-    paymentNote: rec.paymentNote,
-    subscriptionPlan: adminMatch ? 'annual' : rec.subscriptionPlan,
-    planExpiresAt: rec.subscriptionExpiresAt || null,
-    approvedBy: rec.approvedBy,
-    approvedAt: rec.approvedAt || null,
+    paymentNote: isLegacySelfApproved ? '' : rec.paymentNote,
+    subscriptionPlan: adminMatch
+      ? 'annual'
+      : expired || isLegacySelfApproved
+      ? 'free'
+      : rec.subscriptionPlan,
+    planExpiresAt: effectivelyApproved ? rec.subscriptionExpiresAt || null : null,
+    approvedBy: isLegacySelfApproved ? '' : rec.approvedBy,
+    approvedAt: isLegacySelfApproved ? null : rec.approvedAt || null,
   };
 }
 
@@ -326,7 +345,7 @@ export async function syncSignedInUserProfile(
           email: cleanEmail,
           displayName,
           photoURL,
-          searchesRemaining: 0,
+          searchesRemaining: 2,
           isPremium: false,
           subscriptionPlan: 'free',
           approvalStatus: 'pending',
@@ -390,18 +409,23 @@ export async function syncSignedInUserProfile(
     return mapRecordToAppUser(mapped, true);
   }
 
-  if (!hasApprovalSchema) {
-    // Migrate legacy user document cleanly into pending approval schema (no self-upgrade)
+  const isLegacySelfElevatedNonAdmin =
+    !adminUser &&
+    (String(rawData.approvedBy || '').trim().toLowerCase() === cleanEmail ||
+      String(rawData.paymentNote || '').trim() === 'Site Administrator');
+
+  if (!hasApprovalSchema || isLegacySelfElevatedNonAdmin) {
+    // Normalize legacy or formerly elevated non-admin doc into 2-free-trial pending approval state
     const migrationUpdate = {
       displayName,
       photoURL,
-      searchesRemaining: 0,
+      searchesRemaining: 2,
       isPremium: false,
       subscriptionPlan: 'free',
       approvalStatus: 'pending',
       requestedPlan,
       subscriptionExpiresAt: '',
-      paymentNote,
+      paymentNote: '',
       approvedBy: '',
       approvedAt: '',
       termsAccepted: true,
@@ -459,6 +483,22 @@ export async function updateOwnSubscriptionRequest(
     await updateDoc(userRef, {
       requestedPlan,
       paymentNote: paymentNote.trim().slice(0, 300),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `users/${uid}`);
+  }
+}
+
+export async function consumeOwnFreeTrialCredit(
+  uid: string,
+  nextRemaining: number
+): Promise<void> {
+  const safeRemaining = Math.max(0, Math.min(2, Math.floor(nextRemaining)));
+  const userRef = doc(db, 'users', uid);
+  try {
+    await updateDoc(userRef, {
+      searchesRemaining: safeRemaining,
       updatedAt: serverTimestamp(),
     });
   } catch (err) {

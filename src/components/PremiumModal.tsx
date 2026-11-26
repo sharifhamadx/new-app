@@ -2,7 +2,11 @@ import React, { useState } from 'react';
 import { Language, User, SubscriptionPlan } from '../types';
 import { useUiTranslation } from '../hooks/useTranslatedContent';
 import { apiUrl } from '../utils/apiBase';
-import { redeemActivationCode } from '../utils/sessionClient';
+import {
+  reloadCurrentFirebaseUser,
+  syncSignedInUserProfile,
+  updateOwnSubscriptionRequest,
+} from '../firebase';
 import {
   X,
   Crown,
@@ -10,11 +14,11 @@ import {
   Check,
   AlertCircle,
   Compass,
-  KeyRound,
   MessageCircle,
   Loader2,
-  CheckSquare,
-  Square,
+  RefreshCw,
+  ArrowLeft,
+  ArrowRight,
 } from 'lucide-react';
 
 interface PremiumModalProps {
@@ -22,7 +26,6 @@ interface PremiumModalProps {
   onClose: () => void;
   user: User | null;
   onSessionUpdated?: (user: User, adminSetupRequired: boolean) => void;
-  onOpenTerms?: () => void;
   currentLang: Language;
 }
 
@@ -31,16 +34,16 @@ export const PremiumModal: React.FC<PremiumModalProps> = ({
   onClose,
   user,
   onSessionUpdated,
-  onOpenTerms,
   currentLang,
 }) => {
-  const [selectedPlan, setSelectedPlan] = useState<SubscriptionPlan>('weekly_pass');
-  const [activationCode, setActivationCode] = useState('');
-  const [termsAgreed, setTermsAgreed] = useState<boolean>(Boolean(user?.termsAccepted));
-  const [processing, setProcessing] = useState(false);
-  const [success, setSuccess] = useState(false);
+  const [selectedPlan, setSelectedPlan] = useState<SubscriptionPlan>('monthly');
+  const [paymentNote, setPaymentNote] = useState('');
+  const [refreshing, setRefreshing] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const { t } = useUiTranslation(currentLang);
+  const isAr = String(currentLang || '').toLowerCase().startsWith('ar');
+  const BackArrow = isAr ? ArrowRight : ArrowLeft;
 
   if (!isOpen) return null;
 
@@ -51,40 +54,55 @@ export const PremiumModal: React.FC<PremiumModalProps> = ({
   );
 
   const confirmText =
-    selectedPlan === 'weekly_pass'
-      ? t.monetization.confirmWeeklyPass
-      : selectedPlan === 'monthly'
-      ? t.monetization.confirmMonthlyPlan
-      : t.monetization.confirmAnnualPlan;
+    selectedPlan === 'annual'
+      ? t.monetization.confirmAnnualPlan
+      : t.monetization.confirmMonthlyPlan;
 
-  const handleActivateCode = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!termsAgreed) {
-      setErrorMsg(t.auth.agreementRequiredNotice);
-      return;
-    }
-    if (!activationCode.trim()) {
-      setErrorMsg(t.auth.signInGenericError);
-      return;
-    }
-
-    setProcessing(true);
+  const handleSaveRequestAndWhatsapp = async () => {
     setErrorMsg(null);
-    try {
-      const res = await redeemActivationCode(activationCode.trim(), true);
-      setSuccess(true);
-      setActivationCode('');
-      if (onSessionUpdated) {
-        onSessionUpdated(res.user, res.adminSetupRequired);
+    if (user && !user.isGuest && user.emailVerified !== false) {
+      try {
+        await updateOwnSubscriptionRequest(
+          user.uid,
+          selectedPlan,
+          paymentNote.trim() || `${selectedPlan} WhatsApp receipt`
+        );
+      } catch {
+        // non-fatal request log
       }
-      setTimeout(() => {
-        setSuccess(false);
-        onClose();
-      }, 950);
+    }
+    window.open(whatsappSubscribeUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleRefreshActivation = async () => {
+    setRefreshing(true);
+    setErrorMsg(null);
+    setStatusMessage(null);
+    try {
+      const fbUser = await reloadCurrentFirebaseUser();
+      if (!fbUser) {
+        throw new Error(isAr ? 'يرجى تسجيل الدخول بحسابك أولاً.' : 'Please sign in with your email first.');
+      }
+      const synced = await syncSignedInUserProfile(fbUser, { requestedPlan: selectedPlan });
+      if (onSessionUpdated) {
+        onSessionUpdated(synced, false);
+      }
+      if (synced.isPremium || synced.isAdmin) {
+        setStatusMessage(t.monetization.paymentSuccess);
+        setTimeout(() => {
+          onClose();
+        }, 850);
+      } else {
+        setStatusMessage(
+          isAr
+            ? 'لا يزال حسابك بانتظار استلام إيصال الدفع عبر واتساب وتفعيل المدير للخدمات غير المحدودة.'
+            : 'Your account is still awaiting Admin verification of your WhatsApp payment receipt.'
+        );
+      }
     } catch (err: any) {
       setErrorMsg(err?.message || t.auth.signInGenericError);
     } finally {
-      setProcessing(false);
+      setRefreshing(false);
     }
   };
 
@@ -119,13 +137,6 @@ export const PremiumModal: React.FC<PremiumModalProps> = ({
 
         {/* Body */}
         <div className="p-6 space-y-5 max-h-[82vh] overflow-y-auto">
-          {user?.isAdmin && (
-            <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200 text-xs space-y-1">
-              <p className="font-bold">{t.auth.adminBadge}</p>
-              <p className="leading-relaxed">{t.auth.adminWelcome}</p>
-            </div>
-          )}
-
           {errorMsg && (
             <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0" />
@@ -133,65 +144,34 @@ export const PremiumModal: React.FC<PremiumModalProps> = ({
             </div>
           )}
 
-          {/* 3-Tier Plans */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <button
-              type="button"
-              onClick={() => setSelectedPlan('weekly_pass')}
-              className={`p-4 rounded-xl border-2 text-start transition-colors cursor-pointer flex flex-col justify-between ${
-                selectedPlan === 'weekly_pass'
-                  ? 'border-sky-600 bg-sky-50/70 dark:bg-sky-950/30 dark:border-sky-500'
-                  : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-800/50'
-              }`}
-            >
-              <div>
-                <div className="flex items-center justify-between gap-2 mb-2">
-                  <span className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1">
-                    <Compass className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400 shrink-0" />
-                    <span>{t.monetization.weeklyPassOption}</span>
-                  </span>
-                  <div
-                    className={`w-4 h-4 rounded-full flex items-center justify-center border shrink-0 ${
-                      selectedPlan === 'weekly_pass'
-                        ? 'border-sky-600 bg-sky-600 text-white'
-                        : 'border-slate-300 dark:border-slate-600'
-                    }`}
-                  >
-                    {selectedPlan === 'weekly_pass' && <Check className="w-3 h-3 stroke-[3]" />}
-                  </div>
-                </div>
-                <div className="flex items-baseline gap-1 tabular-nums">
-                  <span className="text-2xl font-extrabold text-sky-700 dark:text-sky-400">
-                    {t.monetization.weeklyPassPrice}
-                  </span>
-                  <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                    {t.monetization.weeklyPassPer}
-                  </span>
-                </div>
-              </div>
-              <p className="text-xs text-slate-600 dark:text-slate-300 mt-2 leading-snug">
-                {t.monetization.weeklyPassDesc}
-              </p>
-            </button>
+          {statusMessage && (
+            <div className="p-3.5 rounded-xl bg-sky-50 dark:bg-[#061325] border border-[#0D5EAF]/30 text-[#082F5E] dark:text-sky-200 text-xs font-bold flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-[#0D5EAF] dark:text-sky-400 shrink-0" />
+              <span>{statusMessage}</span>
+            </div>
+          )}
 
+          {/* 2 Official Plans: Monthly €5 & Annual €50 */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
             <button
               type="button"
               onClick={() => setSelectedPlan('monthly')}
-              className={`p-4 rounded-xl border-2 text-start transition-colors cursor-pointer flex flex-col justify-between ${
+              className={`p-5 rounded-xl border-2 text-start transition-colors cursor-pointer flex flex-col justify-between ${
                 selectedPlan === 'monthly'
-                  ? 'border-sky-600 bg-sky-50/70 dark:bg-sky-950/30 dark:border-sky-500'
+                  ? 'border-[#0D5EAF] bg-sky-50/70 dark:bg-sky-950/30 dark:border-sky-500'
                   : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-800/50'
               }`}
             >
               <div>
                 <div className="flex items-center justify-between gap-2 mb-2">
-                  <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                    {t.monetization.monthlyOption}
+                  <span className="text-xs font-bold text-[#082F5E] dark:text-slate-200 flex items-center gap-1.5">
+                    <Compass className="w-4 h-4 text-[#0D5EAF] dark:text-sky-400 shrink-0" />
+                    <span>{t.monetization.monthlyOption}</span>
                   </span>
                   <div
                     className={`w-4 h-4 rounded-full flex items-center justify-center border shrink-0 ${
                       selectedPlan === 'monthly'
-                        ? 'border-sky-600 bg-sky-600 text-white'
+                        ? 'border-[#0D5EAF] bg-[#0D5EAF] text-white'
                         : 'border-slate-300 dark:border-slate-600'
                     }`}
                   >
@@ -199,15 +179,15 @@ export const PremiumModal: React.FC<PremiumModalProps> = ({
                   </div>
                 </div>
                 <div className="flex items-baseline gap-1 tabular-nums">
-                  <span className="text-2xl font-extrabold text-slate-900 dark:text-white">
+                  <span className="text-3xl font-extrabold text-[#0D5EAF] dark:text-sky-400">
                     {t.monetization.monthlyPrice}
                   </span>
-                  <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                  <span className="text-xs text-slate-500 dark:text-slate-400">
                     {t.monetization.monthlyPer}
                   </span>
                 </div>
               </div>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 leading-snug">
+              <p className="text-xs text-slate-600 dark:text-slate-300 mt-2 leading-snug">
                 {t.monetization.monthlyDesc}
               </p>
             </button>
@@ -215,7 +195,7 @@ export const PremiumModal: React.FC<PremiumModalProps> = ({
             <button
               type="button"
               onClick={() => setSelectedPlan('annual')}
-              className={`p-4 rounded-xl border-2 text-start transition-colors cursor-pointer flex flex-col justify-between ${
+              className={`p-5 rounded-xl border-2 text-start transition-colors cursor-pointer flex flex-col justify-between ${
                 selectedPlan === 'annual'
                   ? 'border-amber-500 bg-amber-50/70 dark:bg-amber-950/30 dark:border-amber-400'
                   : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-800/50'
@@ -223,8 +203,9 @@ export const PremiumModal: React.FC<PremiumModalProps> = ({
             >
               <div>
                 <div className="flex items-center justify-between gap-2 mb-2">
-                  <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                    {t.monetization.annualOption}
+                  <span className="text-xs font-bold text-[#082F5E] dark:text-slate-200 flex items-center gap-1.5">
+                    <Crown className="w-4 h-4 text-amber-500 shrink-0" />
+                    <span>{t.monetization.annualOption}</span>
                   </span>
                   <div
                     className={`w-4 h-4 rounded-full flex items-center justify-center border shrink-0 ${
@@ -237,10 +218,10 @@ export const PremiumModal: React.FC<PremiumModalProps> = ({
                   </div>
                 </div>
                 <div className="flex items-baseline gap-1 tabular-nums">
-                  <span className="text-2xl font-extrabold text-amber-600 dark:text-amber-400">
+                  <span className="text-3xl font-extrabold text-amber-600 dark:text-amber-400">
                     {t.monetization.annualPrice}
                   </span>
-                  <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                  <span className="text-xs text-slate-500 dark:text-slate-400">
                     {t.monetization.annualPer}
                   </span>
                 </div>
@@ -263,92 +244,61 @@ export const PremiumModal: React.FC<PremiumModalProps> = ({
             ))}
           </div>
 
-          {/* Primary WhatsApp Subscription Link (never exposes phone number) */}
-          <a
-            href={whatsappSubscribeUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="w-full py-3.5 px-6 rounded-xl font-bold text-sm bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center gap-2 transition-colors"
-          >
-            <MessageCircle className="w-4 h-4 shrink-0" />
-            <span>{confirmText}</span>
-          </a>
-
-          {/* Inline Activation Code Entry */}
-          {success ? (
-            <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-center font-bold text-sm flex items-center justify-center gap-2">
-              <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-              <span>{t.monetization.paymentSuccess}</span>
-            </div>
-          ) : (
-            <form
-              onSubmit={handleActivateCode}
-              className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-3"
-            >
-              <p className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
-                <KeyRound className="w-3.5 h-3.5 text-sky-700 dark:text-sky-400" />
-                <span>{t.auth.orEnterCodeTitle}</span>
+          {/* WhatsApp Payment Receipt explanation */}
+          <div className="p-4 rounded-xl bg-[#F7FAFE] dark:bg-[#061325] border border-slate-200 dark:border-[#163256] space-y-3">
+            <p className="text-xs font-bold text-[#082F5E] dark:text-white leading-relaxed">
+              {isAr
+                ? 'طريقة التفعيل: ادخل إلى واتساب وأرسل إيصال الدفع مع بريدك الإلكتروني أدناه، وسيقوم المدير فوراً بفك جميع الخدمات غير المحدودة على حسابك (€5 لشهر أو €50 لسنة).'
+                : 'Activation: Open WhatsApp and send your payment receipt along with your email below. Admin will unlock unlimited services immediately (€5/month or €50/year).'}
+            </p>
+            {user?.email && (
+              <p className="text-xs font-mono font-bold text-[#0D5EAF] dark:text-sky-300">
+                {user.email}
               </p>
+            )}
+            <input
+              type="text"
+              value={paymentNote}
+              onChange={(e) => setPaymentNote(e.target.value)}
+              maxLength={200}
+              placeholder={
+                isAr
+                  ? 'ملاحظة اختيارية للدفع (مثلاً: تحويل بنكي / نقدي)'
+                  : 'Optional payment note (e.g. transfer reference)'
+              }
+              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0B1D36] text-xs text-[#082F5E] dark:text-white"
+            />
+          </div>
 
-              <div className="flex flex-col sm:flex-row gap-2">
-                <input
-                  type="text"
-                  value={activationCode}
-                  onChange={(e) => setActivationCode(e.target.value.toUpperCase())}
-                  placeholder={t.auth.activationCodePlaceholder}
-                  autoComplete="off"
-                  spellCheck={false}
-                  className="flex-1 min-w-0 px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 font-mono text-xs sm:text-sm font-bold tracking-wider text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-sky-600"
-                />
-                <button
-                  type="submit"
-                  disabled={processing}
-                  className="px-4 py-2.5 rounded-xl bg-[#0D5EAF] hover:bg-[#0A4A8B] disabled:opacity-60 text-white text-xs font-bold flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
-                >
-                  {processing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <KeyRound className="w-3.5 h-3.5" />}
-                  <span>{t.auth.activateCodeBtn}</span>
-                </button>
-              </div>
+          <div className="flex flex-col sm:flex-row gap-2.5">
+            <button
+              type="button"
+              onClick={() => void handleSaveRequestAndWhatsapp()}
+              className="flex-1 py-3.5 px-6 rounded-xl font-bold text-sm bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center gap-2 transition-colors cursor-pointer"
+            >
+              <MessageCircle className="w-4 h-4 shrink-0" />
+              <span>{confirmText}</span>
+            </button>
 
-              <div className="flex items-start gap-2 pt-0.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTermsAgreed(!termsAgreed);
-                    setErrorMsg(null);
-                  }}
-                  className="mt-0.5 text-slate-700 dark:text-slate-300 shrink-0 cursor-pointer"
-                  aria-label="Agree to Terms"
-                >
-                  {termsAgreed ? (
-                    <CheckSquare className="w-4 h-4 text-sky-700 dark:text-sky-400" />
-                  ) : (
-                    <Square className="w-4 h-4 text-slate-400" />
-                  )}
-                </button>
-                <span className="text-[11px] text-slate-600 dark:text-slate-300 leading-snug">
-                  {t.auth.termsAgreementCheckbox}{' '}
-                  {onOpenTerms && (
-                    <button
-                      type="button"
-                      onClick={onOpenTerms}
-                      className="underline font-semibold text-sky-700 dark:text-sky-400 cursor-pointer"
-                    >
-                      {t.auth.termsLinkText}
-                    </button>
-                  )}
-                </span>
-              </div>
-            </form>
-          )}
+            <button
+              type="button"
+              disabled={refreshing}
+              onClick={() => void handleRefreshActivation()}
+              className="py-3.5 px-5 rounded-xl font-bold text-xs bg-[#0D5EAF] hover:bg-[#0A4A8B] text-white flex items-center justify-center gap-2 transition-colors cursor-pointer whitespace-nowrap"
+            >
+              {refreshing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+              <span>{isAr ? 'تحديث حالة التفعيل' : 'Refresh Status'}</span>
+            </button>
+          </div>
 
           <div className="text-center">
             <button
               type="button"
               onClick={onClose}
-              className="text-xs font-semibold text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-[#082F5E] dark:hover:text-slate-200 transition-colors cursor-pointer"
             >
-              {t.monetization.close}
+              <BackArrow className="w-3.5 h-3.5" />
+              <span>{isAr ? 'رجوع' : t.monetization.close}</span>
             </button>
           </div>
         </div>
