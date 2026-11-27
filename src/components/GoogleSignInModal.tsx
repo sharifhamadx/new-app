@@ -5,7 +5,6 @@ import { useUiTranslation } from '../hooks/useTranslatedContent';
 import { apiUrl, getActiveApiBaseUrl } from '../utils/apiBase';
 import { launchNativeMobileGoogleAuth } from '../utils/mobileAuthBridge';
 import {
-  FIREBASE_PROJECT_ID,
   registerWithEmail,
   reloadCurrentFirebaseUser,
   resendVerificationEmail,
@@ -16,7 +15,6 @@ import {
 } from '../firebase';
 import {
   X,
-  ShieldCheck,
   CheckSquare,
   Square,
   ExternalLink,
@@ -30,8 +28,6 @@ import {
   RefreshCw,
   ArrowLeft,
   ArrowRight,
-  Copy,
-  Check,
 } from 'lucide-react';
 
 interface GoogleSignInModalProps {
@@ -67,14 +63,11 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
 
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [unauthorizedHost, setUnauthorizedHost] = useState<string | null>(null);
-  const [domainCopied, setDomainCopied] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (isOpen) {
       setErrorMsg(null);
-      setUnauthorizedHost(null);
       setSuccessMsg(null);
       setLoading(false);
       setNeedsVerificationUser(null);
@@ -121,7 +114,6 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
 
     setLoading(true);
     setErrorMsg(null);
-    setUnauthorizedHost(null);
     setSuccessMsg(null);
 
     try {
@@ -135,17 +127,8 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
       if (isNative) {
         const base = getActiveApiBaseUrl();
         if (!base) {
-          throw new Error(
-            isAr
-              ? 'يرجى ربط رابط خادم Render أولاً لتسجيل الدخول عبر Google في التطبيق.'
-              : 'Configure your Render Server URL first or sign in with Email & Password below.'
-          );
+          throw new Error(t.auth.signInGenericError);
         }
-        setSuccessMsg(
-          isAr
-            ? 'أكمل تسجيل الدخول عبر Google في المتصفح المفتوح، وسيتم إرجاعك تلقائياً للتطبيق...'
-            : 'Complete Google Sign-In in the opened browser — you will return to AEGEA automatically...'
-        );
         await launchNativeMobileGoogleAuth({
           baseUrl: base,
           lang: currentLang,
@@ -171,12 +154,10 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
       } else if (code === 'auth/popup-blocked') {
         setErrorMsg(t.auth.popupBlockedError);
       } else if (code === 'auth/unauthorized-domain' || /unauthorized-domain/i.test(msgStr)) {
-        const host = typeof window !== 'undefined' ? window.location.hostname : '';
-        setUnauthorizedHost(host || 'new-app-a81o.onrender.com');
         setErrorMsg(
           isAr
-            ? `يتطلب تسجيل دخول Google تفعيل النطاق (${host}) في Firebase Console، أو الدخول بالبريد وكلمة المرور أدناه.`
-            : `Google Sign-In requires "${host}" in Firebase Authorized domains, or sign in with Email & Password below.`
+            ? 'تعذر إتمام الدخول عبر Google حالياً. يرجى المحاولة مجدداً أو الدخول بالبريد الإلكتروني.'
+            : 'Google Sign-In is temporarily unavailable. Please try again or sign in with Email.'
         );
       } else {
         setErrorMsg(err?.message || t.auth.signInGenericError);
@@ -205,7 +186,6 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
 
     setLoading(true);
     setErrorMsg(null);
-    setUnauthorizedHost(null);
     setSuccessMsg(null);
 
     try {
@@ -228,22 +208,16 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
       if (code === 'auth/operation-not-allowed') {
         setErrorMsg(
           isAr
-            ? 'تسجيل الدخول بالبريد وكلمة المرور غير مفعّل بعد في Firebase Console (Authentication → Sign-in method → Email/Password).'
-            : 'Email/Password sign-in is not yet enabled in Firebase Console (Authentication → Sign-in method → Email/Password).'
+            ? 'تسجيل الدخول بالبريد الإلكتروني غير متاح حالياً. استخدم الدخول عبر Google.'
+            : 'Email sign-in is currently unavailable. Please continue with Google.'
         );
       } else if (code === 'auth/unauthorized-domain' || /unauthorized-domain/i.test(msgStr)) {
-        const host = typeof window !== 'undefined' ? window.location.hostname : '';
-        setUnauthorizedHost(host || 'new-app-a81o.onrender.com');
-        setErrorMsg(
-          isAr
-            ? `يرجى إضافة النطاق "${host}" إلى Authorized domains في Firebase Console.`
-            : `Please add "${host}" to Authorized domains in Firebase Console.`
-        );
+        setErrorMsg(t.auth.signInGenericError);
       } else if (code === 'auth/email-already-in-use') {
         setErrorMsg(
           isAr
-            ? 'هذا البريد الإلكتروني مسجل مسبقاً (ربما عبر Google). سجّل الدخول أو اضغط "نسيت / تعيين كلمة مرور" لإعداده.'
-            : 'This email is already registered (possibly via Google). Sign in or click "Forgot / Set Password".'
+            ? 'هذا البريد الإلكتروني مسجل مسبقاً. سجّل الدخول أو اضغط "نسيت / تعيين كلمة مرور".'
+            : 'This email is already registered. Sign in or click "Forgot Password".'
         );
         setAuthMode('signin');
       } else if (
@@ -253,8 +227,8 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
       ) {
         setErrorMsg(
           isAr
-            ? 'البريد الإلكتروني أو كلمة المرور غير صحيحة. إذا كنت دخلت سابقاً بـ Google فقط، اضغط "نسيت / تعيين كلمة مرور" أدناه لإرسال رابط تعيين كلمة مرور لبريدك.'
-            : 'Incorrect email or password. If you previously used Google Sign-In only, click "Forgot / Set Password" below.'
+            ? 'البريد الإلكتروني أو كلمة المرور غير صحيحة. إذا كنت دخلت سابقاً بـ Google، اضغط "نسيت / تعيين كلمة مرور" لإعداد كلمة مرور.'
+            : 'Incorrect email or password. If you previously used Google Sign-In, click "Forgot Password".'
         );
       } else {
         setErrorMsg(err?.message || t.auth.signInGenericError);
@@ -344,40 +318,9 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
         {/* Body */}
         <div className="p-6 space-y-4 max-h-[78vh] overflow-y-auto">
           {errorMsg && (
-            <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs space-y-2.5">
-              <div className="flex items-start gap-2.5">
-                <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
-                <span className="leading-relaxed">{errorMsg}</span>
-              </div>
-              {unauthorizedHost && (
-                <div className="pt-2 border-t border-rose-200/80 dark:border-rose-800/70 flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        await navigator.clipboard.writeText(unauthorizedHost);
-                        setDomainCopied(true);
-                        window.setTimeout(() => setDomainCopied(false), 2500);
-                      } catch {
-                        // ignore clipboard fallback
-                      }
-                    }}
-                    className="px-2.5 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-rose-300 dark:border-rose-700 text-[#082F5E] dark:text-white font-bold inline-flex items-center gap-1.5 cursor-pointer"
-                  >
-                    {domainCopied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span>{domainCopied ? (isAr ? 'تم النسخ' : 'Copied') : unauthorizedHost}</span>
-                  </button>
-                  <a
-                    href={`https://console.firebase.google.com/project/${FIREBASE_PROJECT_ID}/authentication/settings`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-2.5 py-1.5 rounded-lg bg-[#0D5EAF] text-white font-bold inline-flex items-center gap-1.5"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                    <span>{isAr ? 'فتح Firebase Console' : 'Firebase Settings'}</span>
-                  </a>
-                </div>
-              )}
+            <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs flex items-start gap-2.5">
+              <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+              <span className="leading-relaxed">{errorMsg}</span>
             </div>
           )}
 
@@ -669,11 +612,6 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
               </div>
             </div>
           )}
-
-          <div className="flex items-center justify-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400 pt-1">
-            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-            <span>{t.auth.simulationNotice}</span>
-          </div>
         </div>
       </div>
     </div>

@@ -1,6 +1,7 @@
 import { Capacitor } from '@capacitor/core';
 
 const CUSTOM_API_BASE_KEY = 'aegea_custom_api_base_v1';
+const DEFAULT_NATIVE_API_BASE = 'https://new-app-a81o.onrender.com';
 
 export function isNativeAppPlatform(): boolean {
   try {
@@ -28,7 +29,7 @@ export function getCustomApiBaseUrl(): string {
 export function setCustomApiBaseUrl(rawUrl: string): string {
   const clean = normalizeBaseUrl(rawUrl);
   if (!clean) {
-    throw new Error('Please enter a valid server URL starting with https:// (for example https://your-app.onrender.com).');
+    throw new Error('Please enter a valid server URL starting with https://');
   }
   try {
     localStorage.setItem(CUSTOM_API_BASE_KEY, clean);
@@ -56,6 +57,7 @@ export function getActiveApiBaseUrl(): string {
   const envBase = getEnvApiBaseUrl();
   if (envBase) return envBase;
   if (custom) return custom;
+  if (isNativeAppPlatform()) return DEFAULT_NATIVE_API_BASE;
   return '';
 }
 

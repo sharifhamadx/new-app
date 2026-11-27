@@ -81,7 +81,7 @@ export const PWAInstallButton: React.FC<PWAComponentProps> = ({ currentLang }) =
                   <Smartphone className="w-5 h-5 text-sky-700 dark:text-sky-400" />
                 </div>
                 <h3 className="font-editorial text-base sm:text-lg font-bold text-slate-900 dark:text-white leading-snug">
-                  {t.pwa?.iosModalTitle || 'Install AEGEA on Your Phone (No APK Needed)'}
+                  {t.pwa?.iosModalTitle || 'Install AEGEA on Your Phone'}
                 </h3>
               </div>
               <button
@@ -96,7 +96,7 @@ export const PWAInstallButton: React.FC<PWAComponentProps> = ({ currentLang }) =
 
             <p className="text-xs sm:text-sm text-sky-800 dark:text-sky-300 bg-sky-50 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-800/70 rounded-xl p-3 leading-relaxed">
               {t.pwa?.noApkBenefit ||
-                'Installs directly like a native app from your mobile browser with zero APK sideloading or localhost errors.'}
+                'Add AEGEA directly to your phone home screen for fast one-tap access.'}
             </p>
 
             <div className="space-y-2.5 text-xs sm:text-sm text-slate-700 dark:text-slate-200 leading-relaxed">

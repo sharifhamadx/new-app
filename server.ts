@@ -6539,13 +6539,18 @@ app.get('/api/city-live', async (req: Request, res: Response) => {
   }
 });
 
-// Mobile APK Authorized-Domain Google Sign-In Bridge (Chrome Custom Tab -> Android Intent + Session Poll)
-const mobileAuthPendingMap = new Map<string, { idToken: string; accessToken: string; createdAt: number }>();
+// Mobile APK Google Sign-In Bridge (Chrome Custom Tab -> Android Intent + Session Poll)
+const mobileAuthPendingMap = new Map<
+  string,
+  { idToken: string; accessToken: string; createdAt: number; claimedAt?: number }
+>();
 
 function pruneExpiredMobileAuthSessions() {
-  const cutoff = Date.now() - 6 * 60 * 1000;
+  const now = Date.now();
+  const createdCutoff = now - 6 * 60 * 1000;
+  const claimedCutoff = now - 90 * 1000;
   for (const [k, v] of mobileAuthPendingMap.entries()) {
-    if (v.createdAt < cutoff) {
+    if (v.createdAt < createdCutoff || (v.claimedAt && v.claimedAt < claimedCutoff)) {
       mobileAuthPendingMap.delete(k);
     }
   }
@@ -6587,7 +6592,9 @@ app.get('/api/mobile-auth/poll', (req: Request, res: Response) => {
   if (!entry) {
     return res.json({ ready: false });
   }
-  mobileAuthPendingMap.delete(session);
+  if (!entry.claimedAt) {
+    entry.claimedAt = Date.now();
+  }
   res.setHeader('Cache-Control', 'no-store');
   return res.json({
     ready: true,
@@ -6598,7 +6605,7 @@ app.get('/api/mobile-auth/poll', (req: Request, res: Response) => {
 
 app.get('/mobile-auth', (req: Request, res: Response) => {
   if (!firebaseClientConfig?.apiKey) {
-    return res.status(500).send('Firebase configuration unavailable.');
+    return res.status(500).send('Configuration unavailable.');
   }
   const lang = String(req.query.lang || 'en').toLowerCase().startsWith('ar') ? 'ar' : 'en';
   const isAr = lang === 'ar';
@@ -6614,13 +6621,12 @@ app.get('/mobile-auth', (req: Request, res: Response) => {
   <title>AEGEA — ${isAr ? 'تسجيل الدخول عبر Google' : 'Google Sign-In'}</title>
   <style>
     body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;background:#061325;color:#f8fafc;font-family:system-ui,-apple-system,sans-serif}
-    .card{width:100%;max-width:400px;background:#0B1D36;border:1px solid #163256;border-radius:18px;padding:28px;text-align:center;box-shadow:0 20px 45px rgba(0,0,0,.45)}
-    .brand{font-size:22px;font-weight:800;letter-spacing:.04em;color:#ffffff;margin:0 0 6px}
+    .card{width:100%;max-width:390px;background:#0B1D36;border:1px solid #163256;border-radius:18px;padding:28px;text-align:center;box-shadow:0 20px 45px rgba(0,0,0,.45)}
+    .brand{font-size:22px;font-weight:800;letter-spacing:.05em;color:#ffffff;margin:0 0 8px}
     .sub{font-size:13px;color:#cbd5e1;margin:0 0 22px;line-height:1.55}
     .btn{width:100%;padding:14px 18px;border:0;border-radius:12px;background:#0D5EAF;color:#fff;font-size:15px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:10px;text-decoration:none;box-sizing:border-box}
     .btn:disabled{opacity:.6}
-    .btn-return{background:#059669;margin-top:14px;display:none}
-    .btn-alt{background:#1E293B;border:1px solid #334155;margin-top:10px;display:none;font-size:13px;padding:11px 14px}
+    .btn-return{background:#059669;margin-top:8px;display:none}
     .msg{margin-top:16px;font-size:13px;color:#cbd5e1;line-height:1.5;word-break:break-word}
     .err{color:#fda4af}
   </style>
@@ -6628,12 +6634,11 @@ app.get('/mobile-auth', (req: Request, res: Response) => {
 <body>
   <div class="card">
     <h1 class="brand">AEGEA</h1>
-    <p class="sub">${isAr ? 'تسجيل الدخول الآمن عبر Google لحسابك في تطبيق AEGEA، ثم العودة للتطبيق تلقائياً.' : 'Sign in securely with Google to continue inside the AEGEA Android app.'}</p>
+    <p class="sub">${isAr ? 'تسجيل الدخول إلى حسابك في AEGEA' : 'Sign in to your AEGEA account'}</p>
     <button id="loginBtn" class="btn" type="button">
       <span>${isAr ? 'المتابعة باستخدام Google' : 'Continue with Google'}</span>
     </button>
-    <a id="returnLink" class="btn btn-return" href="#">${isAr ? 'العودة إلى تطبيق AEGEA الآن' : 'Return to AEGEA App'}</a>
-    <a id="schemeLink" class="btn btn-alt" href="#">${isAr ? 'فتح التطبيق مباشرة' : 'Open App Direct Link'}</a>
+    <a id="returnLink" class="btn btn-return" href="#">${isAr ? 'العودة إلى تطبيق AEGEA' : 'Return to AEGEA'}</a>
     <p id="statusMsg" class="msg"></p>
   </div>
   <script type="module">
@@ -6657,7 +6662,6 @@ app.get('/mobile-auth', (req: Request, res: Response) => {
 
     const btn = document.getElementById('loginBtn');
     const returnLink = document.getElementById('returnLink');
-    const schemeLink = document.getElementById('schemeLink');
     const statusMsg = document.getElementById('statusMsg');
 
     async function completeAndReturn(result) {
@@ -6666,68 +6670,56 @@ app.get('/mobile-auth', (req: Request, res: Response) => {
       const idToken = cred?.idToken || tokenResp.oauthIdToken || '';
       const accessToken = cred?.accessToken || tokenResp.oauthAccessToken || '';
       if (!idToken && !accessToken) {
-        throw new Error(${JSON.stringify(isAr ? 'لم يتم استلام رمز التحقق من Google.' : 'Missing Google OAuth credential.')});
+        throw new Error(${JSON.stringify(isAr ? 'تعذر التحقق من حساب Google.' : 'Could not verify Google account.')});
       }
 
+      let postedSession = false;
       if (session) {
         try { sessionStorage.removeItem('aegea_mobile_session'); } catch {}
         try {
-          await fetch('/api/mobile-auth/complete', {
+          const resp = await fetch('/api/mobile-auth/complete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ session, idToken, accessToken })
           });
-        } catch (e) {
-          console.warn('mobile-auth complete post warning:', e);
+          postedSession = resp.ok;
+        } catch {
+          postedSession = false;
         }
       }
 
-      const qs = session
+      const qs = postedSession && session
         ? 'session=' + encodeURIComponent(session)
-        : 'idToken=' + encodeURIComponent(idToken) + '&accessToken=' + encodeURIComponent(accessToken);
+        : 'idToken=' + encodeURIComponent(idToken) + '&accessToken=' + encodeURIComponent(accessToken) + (session ? '&session=' + encodeURIComponent(session) : '');
+      const intentUri = 'intent://auth?' + qs + '#Intent;scheme=com.aegea.smartguide;package=com.aegea.smartguide;action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE;end';
       const deepLink = 'com.aegea.smartguide://auth?' + qs;
-      const intentUri = 'intent://auth?' + qs + '#Intent;scheme=com.aegea.smartguide;package=com.aegea.smartguide;end';
 
       returnLink.href = intentUri;
       returnLink.style.display = 'inline-flex';
-      schemeLink.href = deepLink;
-      schemeLink.style.display = 'inline-flex';
+      returnLink.addEventListener('click', () => {
+        setTimeout(() => {
+          if (document.visibilityState === 'visible') {
+            try { window.location.href = deepLink; } catch {}
+          }
+        }, 350);
+      });
       btn.style.display = 'none';
       statusMsg.className = 'msg';
-      statusMsg.textContent = ${JSON.stringify(isAr ? 'تم تسجيل الدخول بنجاح! جاري إرجاعك لتطبيق AEGEA...' : 'Signed in! Returning to AEGEA App...')};
+      statusMsg.textContent = ${JSON.stringify(isAr ? 'تم تسجيل الدخول بنجاح' : 'Signed in successfully')};
 
       try {
-        window.location.href = intentUri;
+        window.location.replace(intentUri);
       } catch {
-        // ignore intent error and fall back to custom scheme
+        try { window.location.href = deepLink; } catch {}
       }
-      setTimeout(() => {
-        try {
-          window.location.replace(deepLink);
-        } catch {
-          // user can tap the Return button
-        }
-      }, 450);
     }
 
     function showError(err) {
       btn.disabled = false;
       statusMsg.className = 'msg err';
-      const code = String(err?.code || '');
-      const msgStr = String(err?.message || '');
-      if (code === 'auth/unauthorized-domain' || /unauthorized-domain/i.test(msgStr)) {
-        const host = window.location.hostname;
-        statusMsg.textContent = ${JSON.stringify(
-          isAr
-            ? 'هذا النطاق غير مضاف في Firebase Console. أضفه في Authorized domains: '
-            : 'Add this domain in Firebase Console Authorized domains: '
-        )} + host;
-      } else {
-        statusMsg.textContent = err?.message || ${JSON.stringify(isAr ? 'تعذر إتمام تسجيل الدخول.' : 'Could not complete sign-in.')};
-      }
+      statusMsg.textContent = err?.message || ${JSON.stringify(isAr ? 'تعذر إتمام تسجيل الدخول.' : 'Could not complete sign-in.')};
     }
 
-    // Handle redirect completion if browser redirected instead of popup
     getRedirectResult(auth)
       .then((redirectRes) => {
         if (redirectRes && redirectRes.user) {
@@ -6744,14 +6736,13 @@ app.get('/mobile-auth', (req: Request, res: Response) => {
     btn.addEventListener('click', async () => {
       btn.disabled = true;
       statusMsg.className = 'msg';
-      statusMsg.textContent = ${JSON.stringify(isAr ? 'جاري فتح نافذة Google...' : 'Opening Google Sign-In...')};
+      statusMsg.textContent = '';
       try {
         const result = await signInWithPopup(auth, provider);
         await completeAndReturn(result);
       } catch (err) {
         const code = String(err?.code || '');
         if (code === 'auth/popup-blocked') {
-          statusMsg.textContent = ${JSON.stringify(isAr ? 'جاري التحويل لصفحة Google...' : 'Redirecting to Google Sign-In...')};
           await signInWithRedirect(auth, provider);
           return;
         }

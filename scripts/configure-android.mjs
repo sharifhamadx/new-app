@@ -102,7 +102,7 @@ if (fs.existsSync(manifestPath)) {
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="com.aegea.smartguide" android:host="auth" />
+                <data android:scheme="com.aegea.smartguide" />
             </intent-filter>
         </activity>`;
     manifest = manifest.replace('</activity>', authIntentFilter);

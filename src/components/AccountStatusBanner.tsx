@@ -107,18 +107,16 @@ export const AccountStatusBanner: React.FC<AccountStatusBannerProps> = ({
         <div className="p-4 sm:p-5 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 space-y-3">
           <div className="flex items-start gap-3">
             <Server className="w-5 h-5 text-amber-700 dark:text-amber-400 shrink-0 mt-0.5" />
-            <div className="space-y-1 flex-1">
-              <p className="text-xs sm:text-sm font-bold text-[#082F5E] dark:text-white">
-                {isAr
-                  ? 'ربط تطبيق الأندرويد بخادم Render الخاص بك'
-                  : 'Connect Android App to Your Render Backend'}
-              </p>
-              <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-                {isAr
-                  ? 'أدخل رابط Render الخاص بك (مثل https://your-app.onrender.com) لتشغيل البحث والترجمة الفورية داخل الجوال.'
-                  : 'Paste your live Render URL (e.g. https://your-app.onrender.com) to enable AI Search and Live Translation.'}
-              </p>
-            </div>
+              <div className="space-y-1 flex-1">
+                <p className="text-xs sm:text-sm font-bold text-[#082F5E] dark:text-white">
+                  {isAr ? 'ربط التطبيق بالخدمة' : 'Connect App Service'}
+                </p>
+                <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                  {isAr
+                    ? 'أدخل رابط الخدمة لتفعيل البحث والترجمة الفورية.'
+                    : 'Enter your service URL to enable AI Search and Live Translation.'}
+                </p>
+              </div>
           </div>
 
           <form onSubmit={handleSaveServerUrl} className="flex flex-col sm:flex-row gap-2">

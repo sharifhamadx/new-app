@@ -12,6 +12,7 @@ interface PendingMobileAuth {
 
 let activeClaimPromise: Promise<User | null> | null = null;
 let activePollTimer: number | null = null;
+const claimedSessions = new Set<string>();
 
 function generateMobileSessionNonce(): string {
   try {
@@ -42,6 +43,7 @@ export function loadPendingMobileAuth(): PendingMobileAuth | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as PendingMobileAuth;
     if (!parsed?.session || !parsed?.baseUrl) return null;
+    if (claimedSessions.has(parsed.session)) return null;
     // Expire after 6 minutes
     if (Date.now() - Number(parsed.createdAt || 0) > 6 * 60 * 1000) {
       localStorage.removeItem(PENDING_MOBILE_AUTH_KEY);
@@ -65,17 +67,28 @@ export function clearPendingMobileAuth(): void {
   }
 }
 
-async function claimWithTokens(idToken?: string | null, accessToken?: string | null): Promise<User> {
+async function claimWithTokens(
+  idToken?: string | null,
+  accessToken?: string | null,
+  session?: string | null
+): Promise<User> {
+  const fbUser = await signInWithGoogleMobileTokens(idToken, accessToken);
+  const synced = await syncSignedInUserProfile(fbUser);
+  if (session) {
+    claimedSessions.add(session);
+  }
   clearPendingMobileAuth();
   await Browser.close().catch(() => {});
-  const fbUser = await signInWithGoogleMobileTokens(idToken, accessToken);
-  return syncSignedInUserProfile(fbUser);
+  return synced;
 }
 
 export async function pollAndClaimMobileAuth(
   session: string,
   baseUrl: string
 ): Promise<User | null> {
+  if (!session || claimedSessions.has(session)) {
+    return null;
+  }
   if (activeClaimPromise) {
     return activeClaimPromise;
   }
@@ -93,7 +106,7 @@ export async function pollAndClaimMobileAuth(
       if (!resp.ok) return null;
       const data = await resp.json().catch(() => null);
       if (data?.ready && (data?.idToken || data?.accessToken)) {
-        return await claimWithTokens(data.idToken, data.accessToken);
+        return await claimWithTokens(data.idToken, data.accessToken, session);
       }
       return null;
     } catch {
@@ -110,7 +123,7 @@ export async function handleMobileAuthCallbackUrl(
   url: string,
   fallbackBaseUrl?: string
 ): Promise<User | null> {
-  if (!url || !url.toLowerCase().startsWith('com.aegea.smartguide://auth')) {
+  if (!url || !url.toLowerCase().startsWith('com.aegea.smartguide://')) {
     return null;
   }
   if (activeClaimPromise) {
@@ -125,8 +138,12 @@ export async function handleMobileAuthCallbackUrl(
       const accessToken = params.get('accessToken');
       const session = params.get('session');
 
+      if (session && claimedSessions.has(session)) {
+        return null;
+      }
+
       if (idToken || accessToken) {
-        return await claimWithTokens(idToken, accessToken);
+        return await claimWithTokens(idToken, accessToken, session);
       }
 
       if (session) {
@@ -144,7 +161,7 @@ export async function handleMobileAuthCallbackUrl(
           if (resp.ok) {
             const data = await resp.json().catch(() => null);
             if (data?.ready && (data?.idToken || data?.accessToken)) {
-              return await claimWithTokens(data.idToken, data.accessToken);
+              return await claimWithTokens(data.idToken, data.accessToken, session);
             }
           }
         }

@@ -15,7 +15,6 @@ import {
 import { launchNativeMobileGoogleAuth } from '../utils/mobileAuthBridge';
 import { testBackendHealth } from '../utils/sessionClient';
 import {
-  FIREBASE_PROJECT_ID,
   firebaseSignOut,
   registerWithEmail,
   reloadCurrentFirebaseUser,
@@ -32,7 +31,6 @@ import {
   CheckCircle2,
   CheckSquare,
   Compass,
-  Copy,
   ExternalLink,
   Globe,
   Loader2,
@@ -87,8 +85,6 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
 
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [unauthorizedHost, setUnauthorizedHost] = useState<string | null>(null);
-  const [domainCopied, setDomainCopied] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   // Native APK Render Server URL setup
@@ -133,7 +129,6 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
 
     setLoading(true);
     setErrorMsg(null);
-    setUnauthorizedHost(null);
     setSuccessMsg(null);
 
     try {
@@ -148,17 +143,9 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
         const base = getActiveApiBaseUrl();
         if (!base) {
           setNeedsServerConfig(true);
-          throw new Error(
-            isAr
-              ? 'يرجى حفظ رابط خادم Render في الأعلى أولاً لتسجيل الدخول عبر Google في التطبيق.'
-              : 'Please configure your Render server URL above first to sign in with Google.'
-          );
+          setLoading(false);
+          return;
         }
-        setSuccessMsg(
-          isAr
-            ? 'أكمل تسجيل الدخول عبر Google في المتصفح المفتوح، وسيتم إرجاعك تلقائياً للتطبيق...'
-            : 'Complete Google Sign-In in the opened browser — you will return to AEGEA automatically...'
-        );
         await launchNativeMobileGoogleAuth({
           baseUrl: base,
           lang: currentLang,
@@ -184,12 +171,10 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
       } else if (code === 'auth/popup-blocked') {
         setErrorMsg(t.auth.popupBlockedError);
       } else if (code === 'auth/unauthorized-domain' || /unauthorized-domain/i.test(msgStr)) {
-        const host = typeof window !== 'undefined' ? window.location.hostname : '';
-        setUnauthorizedHost(host || 'new-app-a81o.onrender.com');
         setErrorMsg(
           isAr
-            ? `يتطلب تسجيل دخول Google تفعيل النطاق (${host}) في Firebase Console، أو الدخول بالبريد وكلمة المرور أدناه.`
-            : `Google Sign-In requires "${host}" in Firebase Authorized domains, or sign in with Email & Password below.`
+            ? 'تعذر إتمام الدخول عبر Google حالياً. يرجى المحاولة مجدداً أو الدخول بالبريد الإلكتروني.'
+            : 'Google Sign-In is temporarily unavailable. Please try again or sign in with Email.'
         );
       } else {
         setErrorMsg(err?.message || t.auth.signInGenericError);
@@ -218,7 +203,6 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
 
     setLoading(true);
     setErrorMsg(null);
-    setUnauthorizedHost(null);
     setSuccessMsg(null);
 
     try {
@@ -241,22 +225,16 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
       if (code === 'auth/operation-not-allowed') {
         setErrorMsg(
           isAr
-            ? 'تسجيل الدخول بالبريد وكلمة المرور غير مفعّل بعد في Firebase Console (Authentication → Sign-in method → Email/Password).'
-            : 'Email/Password sign-in is not yet enabled in Firebase Console.'
+            ? 'تسجيل الدخول بالبريد الإلكتروني غير متاح حالياً. استخدم الدخول عبر Google.'
+            : 'Email sign-in is currently unavailable. Please continue with Google.'
         );
       } else if (code === 'auth/unauthorized-domain' || /unauthorized-domain/i.test(msgStr)) {
-        const host = typeof window !== 'undefined' ? window.location.hostname : '';
-        setUnauthorizedHost(host || 'new-app-a81o.onrender.com');
-        setErrorMsg(
-          isAr
-            ? `يرجى إضافة النطاق "${host}" إلى Authorized domains في Firebase Console.`
-            : `Please add "${host}" to Authorized domains in Firebase Console.`
-        );
+        setErrorMsg(t.auth.signInGenericError);
       } else if (code === 'auth/email-already-in-use') {
         setErrorMsg(
           isAr
-            ? 'هذا البريد الإلكتروني مسجل مسبقاً (ربما عبر Google). انتقل لتسجيل الدخول، وإذا لم تكن قد عيّنت كلمة مرور له فاضغط "نسيت / تعيين كلمة مرور" لإرسال رابط تعيين كلمة مرور لبريدك.'
-            : 'This email is already registered (possibly via Google). Switch to Sign In and click "Forgot / Set Password" if you need to create a password for it.'
+            ? 'هذا البريد الإلكتروني مسجل مسبقاً. انتقل لتسجيل الدخول أو اضغط "نسيت / تعيين كلمة مرور".'
+            : 'This email is already registered. Switch to Sign In or click "Forgot Password".'
         );
         setAuthMode('signin');
       } else if (
@@ -266,8 +244,8 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
       ) {
         setErrorMsg(
           isAr
-            ? 'البريد الإلكتروني أو كلمة المرور غير صحيحة. إذا كنت تدخل سابقاً بحساب Google فقط، اضغط "نسيت / تعيين كلمة مرور" أدناه لإرسال رابط تعيين كلمة مرور لبريدك والدخول فوراً على Render.'
-            : 'Incorrect email or password. If you previously signed in with Google only, click "Forgot / Set Password" below to set a password and sign in on this domain.'
+            ? 'البريد الإلكتروني أو كلمة المرور غير صحيحة. إذا كنت دخلت عبر Google مسبقاً، اضغط "نسيت / تعيين كلمة مرور" لإعداد كلمة مرور.'
+            : 'Incorrect email or password. If you previously signed in with Google, use "Forgot Password" to set one.'
         );
       } else {
         setErrorMsg(err?.message || t.auth.signInGenericError);
@@ -420,14 +398,12 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
                 <Server className="w-5 h-5 text-amber-700 dark:text-amber-400 shrink-0 mt-0.5" />
                 <div className="space-y-1 flex-1">
                   <p className="text-xs sm:text-sm font-bold text-[#082F5E] dark:text-white">
-                    {isAr
-                      ? 'ربط تطبيق الأندرويد بخادم Render الخاص بك'
-                      : 'Connect Android App to Your Render Backend'}
+                    {isAr ? 'ربط التطبيق بالخدمة' : 'Connect App Service'}
                   </p>
                   <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
                     {isAr
-                      ? 'أدخل رابط Render الخاص بك (مثل https://your-app.onrender.com) لتفعيل تسجيل الدخول عبر Google والبحث والترجمة.'
-                      : 'Enter your live Render URL to enable Google Sign-In, AI Search, and Live Translation.'}
+                      ? 'أدخل رابط الخدمة لتفعيل الدخول والبحث والترجمة.'
+                      : 'Enter your service URL to enable Sign-In, Search, and Translation.'}
                   </p>
                 </div>
               </div>
@@ -500,8 +476,8 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
                   <ShieldCheck className="w-4 h-4 text-emerald-300 shrink-0 mt-0.5" />
                   <span>
                     {isAr
-                      ? 'دخول آمن بحساب Google — لوحة الإدارة وميزات المشتركين محمية بالتحقق الكامل من الهوية.'
-                      : 'Protected by Google Firebase Authentication — full identity verification for subscribers & Admin.'}
+                      ? 'حساب شخصي آمن لحفظ مفضلتك وخطط رحلاتك الصحية في اليونان.'
+                      : 'Secure personal account for your saved spots and curated Greek itineraries.'}
                   </span>
                 </div>
               </div>
@@ -510,58 +486,9 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
             {/* Right Sign-In / Sign-Up Form Panel */}
             <div className="lg:col-span-7 p-6 sm:p-9 space-y-5">
               {errorMsg && (
-                <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs space-y-2.5">
-                  <div className="flex items-start gap-2.5">
-                    <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
-                    <span className="leading-relaxed">{errorMsg}</span>
-                  </div>
-
-                  {unauthorizedHost && (
-                    <div className="pt-2 border-t border-rose-200/80 dark:border-rose-800/70 space-y-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            try {
-                              await navigator.clipboard.writeText(unauthorizedHost);
-                              setDomainCopied(true);
-                              window.setTimeout(() => setDomainCopied(false), 2500);
-                            } catch {
-                              // ignore clipboard fallback
-                            }
-                          }}
-                          className="px-2.5 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-rose-300 dark:border-rose-700 text-[#082F5E] dark:text-white font-bold inline-flex items-center gap-1.5 cursor-pointer"
-                        >
-                          {domainCopied ? (
-                            <Check className="w-3.5 h-3.5 text-emerald-600" />
-                          ) : (
-                            <Copy className="w-3.5 h-3.5" />
-                          )}
-                          <span>
-                            {domainCopied
-                              ? isAr
-                                ? `تم نسخ ${unauthorizedHost}`
-                                : `Copied ${unauthorizedHost}`
-                              : isAr
-                              ? `نسخ النطاق: ${unauthorizedHost}`
-                              : `Copy: ${unauthorizedHost}`}
-                          </span>
-                        </button>
-
-                        <a
-                          href={`https://console.firebase.google.com/project/${FIREBASE_PROJECT_ID}/authentication/settings`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="px-2.5 py-1.5 rounded-lg bg-[#0D5EAF] text-white font-bold inline-flex items-center gap-1.5 hover:bg-[#0A4A8B]"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5" />
-                          <span>
-                            {isAr ? 'إضافة النطاق في Firebase' : 'Add Domain in Firebase'}
-                          </span>
-                        </a>
-                      </div>
-                    </div>
-                  )}
+                <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs flex items-start gap-2.5">
+                  <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+                  <span className="leading-relaxed">{errorMsg}</span>
                 </div>
               )}
 
@@ -613,7 +540,7 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
                     className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#0B1D36] text-xs font-bold text-[#082F5E] dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
                   >
                     <BackArrow className="w-3.5 h-3.5" />
-                    <span>{isAr ? 'رجوع لتسجيل الدخول بحساب آخر' : 'Back to Sign In'}</span>
+                    <span>{isAr ? 'العودة لتسجيل الدخول' : 'Back to Sign In'}</span>
                     <LogOut className="w-3.5 h-3.5 text-rose-500" />
                   </button>
                 </div>
@@ -622,14 +549,9 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
                   <div className="space-y-1">
                     <h2 className="font-editorial text-xl sm:text-2xl font-bold text-[#082F5E] dark:text-white">
                       {isAr
-                        ? 'تسجيل الدخول أو إنشاء حساب عبر Google'
+                        ? 'تسجيل الدخول أو إنشاء حساب'
                         : 'Sign In or Create Account'}
                     </h2>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
-                      {isAr
-                        ? 'يلزم تسجيل الدخول للدخول إلى التطبيق (بما في ذلك حساب المدير)'
-                        : 'Authentication via Google or Email is required to enter the application.'}
-                    </p>
                   </div>
 
                   {/* Primary Hero Google Sign-In / Sign-Up Button */}
@@ -847,7 +769,7 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
                         className="w-full py-2.5 px-4 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center gap-1.5 cursor-pointer"
                       >
                         <BackArrow className="w-3.5 h-3.5" />
-                        <span>{isAr ? 'رجوع للسابق (تسجيل الدخول)' : 'Back to Sign In'}</span>
+                        <span>{isAr ? 'العودة لتسجيل الدخول' : 'Back to Sign In'}</span>
                       </button>
                     )}
                   </form>
