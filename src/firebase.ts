@@ -1,6 +1,8 @@
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
+  setPersistence,
+  browserLocalPersistence,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   sendEmailVerification,
@@ -25,11 +27,13 @@ import {
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 import { ApprovalStatus, FirestoreUserRecord, SubscriptionPlan, User } from './types';
+import { getRememberEmailPreference, saveRememberedEmail } from './utils/rememberedAuth';
 
 const app = initializeApp(firebaseConfig);
 export const FIREBASE_PROJECT_ID = firebaseConfig.projectId;
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
+void setPersistence(auth, browserLocalPersistence).catch(() => {});
 
 export const ADMIN_EMAILS = [
   'sharifhamadx122@gmail.com',
@@ -276,6 +280,9 @@ export async function syncSignedInUserProfile(
   }
 
   const cleanEmail = fbUser.email.trim().toLowerCase();
+  if (getRememberEmailPreference()) {
+    saveRememberedEmail(cleanEmail, true);
+  }
   const displayName = (fbUser.displayName || cleanEmail.split('@')[0] || 'Traveler').slice(0, 120);
   const photoURL = (fbUser.photoURL || '').slice(0, 500);
   const requestedPlan: 'free' | SubscriptionPlan = options?.requestedPlan || 'monthly';

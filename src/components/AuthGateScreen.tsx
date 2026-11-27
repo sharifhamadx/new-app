@@ -21,6 +21,13 @@ import {
   signInWithEmail,
   syncSignedInUserProfile,
 } from '../firebase';
+import {
+  clearRememberedEmail,
+  getRememberedEmail,
+  getRememberEmailPreference,
+  saveRememberedEmail,
+  setRememberEmailPreference,
+} from '../utils/rememberedAuth';
 import { BrandLockup } from './BrandLogo';
 import {
   AlertCircle,
@@ -29,6 +36,8 @@ import {
   CheckSquare,
   Compass,
   ExternalLink,
+  Eye,
+  EyeOff,
   Globe,
   Loader2,
   Lock,
@@ -76,8 +85,10 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
   const [termsAgreed, setTermsAgreed] = useState(true);
 
   const [fullName, setFullName] = useState('');
-  const [emailInput, setEmailInput] = useState('');
+  const [rememberEmail, setRememberEmail] = useState<boolean>(() => getRememberEmailPreference());
+  const [emailInput, setEmailInput] = useState<string>(() => getRememberedEmail());
   const [passwordInput, setPasswordInput] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [requestedPlan, setRequestedPlan] = useState<SubscriptionPlan>('monthly');
 
   const [loading, setLoading] = useState(false);
@@ -140,6 +151,7 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
     setSuccessMsg(null);
 
     try {
+      saveRememberedEmail(cleanEmail, rememberEmail);
       if (authMode === 'register') {
         const { firebaseUser } = await registerWithEmail({
           name: fullName.trim() || cleanEmail.split('@')[0],
@@ -520,16 +532,22 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
                     </button>
                   </div>
 
-                  <form onSubmit={handleEmailAuthSubmit} className="space-y-3">
+                  <form method="post" onSubmit={handleEmailAuthSubmit} className="space-y-3">
                     {authMode === 'register' && (
                       <div className="space-y-1">
-                        <label className="text-xs font-bold text-[#082F5E] dark:text-slate-200 block">
+                        <label
+                          htmlFor="auth-gate-name"
+                          className="text-xs font-bold text-[#082F5E] dark:text-slate-200 block"
+                        >
                           {t.auth.fullNameLabel}
                         </label>
                         <div className="relative">
                           <UserIcon className="w-4 h-4 text-slate-400 absolute start-3 top-1/2 -translate-y-1/2" />
                           <input
+                            id="auth-gate-name"
+                            name="name"
                             type="text"
+                            autoComplete="name"
                             required
                             value={fullName}
                             onChange={(e) => setFullName(e.target.value)}
@@ -541,13 +559,39 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
                     )}
 
                     <div className="space-y-1">
-                      <label className="text-xs font-bold text-[#082F5E] dark:text-slate-200 block">
-                        {t.auth.emailLabel}
-                      </label>
+                      <div className="flex items-center justify-between gap-2">
+                        <label
+                          htmlFor="auth-gate-email"
+                          className="text-xs font-bold text-[#082F5E] dark:text-slate-200 block"
+                        >
+                          {t.auth.emailLabel}
+                        </label>
+                        {emailInput.trim().length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              clearRememberedEmail();
+                              setEmailInput('');
+                              setPasswordInput('');
+                              setErrorMsg(null);
+                            }}
+                            className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 hover:text-[#0D5EAF] dark:hover:text-sky-400 transition-colors cursor-pointer"
+                          >
+                            {isAr ? 'تغيير البريد' : 'Switch email'}
+                          </button>
+                        )}
+                      </div>
                       <div className="relative">
                         <Mail className="w-4 h-4 text-slate-400 absolute start-3 top-1/2 -translate-y-1/2" />
                         <input
+                          id="auth-gate-email"
+                          name="email"
                           type="email"
+                          inputMode="email"
+                          autoComplete="username"
+                          autoCapitalize="none"
+                          autoCorrect="off"
+                          spellCheck={false}
                           required
                           value={emailInput}
                           onChange={(e) => setEmailInput(e.target.value)}
@@ -559,7 +603,10 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
 
                     <div className="space-y-1">
                       <div className="flex items-center justify-between">
-                        <label className="text-xs font-bold text-[#082F5E] dark:text-slate-200">
+                        <label
+                          htmlFor="auth-gate-password"
+                          className="text-xs font-bold text-[#082F5E] dark:text-slate-200"
+                        >
                           {t.auth.passwordLabel}
                         </label>
                         {authMode === 'signin' && (
@@ -575,16 +622,50 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
                       <div className="relative">
                         <Lock className="w-4 h-4 text-slate-400 absolute start-3 top-1/2 -translate-y-1/2" />
                         <input
-                          type="password"
+                          id="auth-gate-password"
+                          name="password"
+                          type={showPassword ? 'text' : 'password'}
+                          autoComplete={authMode === 'register' ? 'new-password' : 'current-password'}
                           required
                           minLength={6}
                           value={passwordInput}
                           onChange={(e) => setPasswordInput(e.target.value)}
                           placeholder="••••••••"
-                          className="w-full ps-9 pe-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#061325] text-xs sm:text-sm text-[#082F5E] dark:text-white focus:outline-none focus:ring-2 focus:ring-[#0D5EAF]"
+                          className="w-full ps-9 pe-10 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-[#061325] text-xs sm:text-sm text-[#082F5E] dark:text-white focus:outline-none focus:ring-2 focus:ring-[#0D5EAF]"
                         />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword((prev) => !prev)}
+                          className="absolute end-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-[#082F5E] dark:hover:text-slate-200 cursor-pointer"
+                          aria-label={showPassword ? 'Hide password' : 'Show password'}
+                        >
+                          {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
                       </div>
                     </div>
+
+                    {/* Keep email saved for next sign-in */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = !rememberEmail;
+                        setRememberEmail(next);
+                        setRememberEmailPreference(next);
+                        if (next && emailInput.trim().includes('@')) {
+                          saveRememberedEmail(emailInput, true);
+                        }
+                      }}
+                      className="flex items-center gap-2 text-xs text-slate-700 dark:text-slate-300 cursor-pointer select-none py-0.5"
+                    >
+                      {rememberEmail ? (
+                        <CheckSquare className="w-4 h-4 text-[#0D5EAF] dark:text-sky-400 shrink-0" />
+                      ) : (
+                        <Square className="w-4 h-4 text-slate-400 shrink-0" />
+                      )}
+                      <span className="font-semibold">
+                        {isAr ? 'تثبيت البريد الإلكتروني للدخول القادم' : 'Remember my email for next visit'}
+                      </span>
+                    </button>
 
                     {authMode === 'register' && (
                       <div className="space-y-1">
