@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { Capacitor } from '@capacitor/core';
 import { Language, SubscriptionPlan, Theme, User } from '../types';
 import {
   SUPPORTED_LANGUAGES,
@@ -12,7 +11,6 @@ import {
   isNativeAppPlatform,
   setCustomApiBaseUrl,
 } from '../utils/apiBase';
-import { launchNativeMobileGoogleAuth } from '../utils/mobileAuthBridge';
 import { testBackendHealth } from '../utils/sessionClient';
 import {
   firebaseSignOut,
@@ -21,7 +19,6 @@ import {
   resendVerificationEmail,
   resetPasswordEmail,
   signInWithEmail,
-  signInWithGooglePopup,
   syncSignedInUserProfile,
 } from '../firebase';
 import { BrandLockup } from './BrandLogo';
@@ -121,69 +118,6 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
     }
   };
 
-  const handleGoogleAuth = async () => {
-    if (!termsAgreed) {
-      setErrorMsg(t.auth.agreementRequiredNotice);
-      return;
-    }
-
-    setLoading(true);
-    setErrorMsg(null);
-    setSuccessMsg(null);
-
-    try {
-      let native = false;
-      try {
-        native = Capacitor.isNativePlatform();
-      } catch {
-        native = false;
-      }
-
-      if (native) {
-        const base = getActiveApiBaseUrl();
-        if (!base) {
-          setNeedsServerConfig(true);
-          setLoading(false);
-          return;
-        }
-        await launchNativeMobileGoogleAuth({
-          baseUrl: base,
-          lang: currentLang,
-          onAuthenticated: (syncedUser) => {
-            onAuthenticated(syncedUser);
-          },
-          onError: (err: any) => {
-            setErrorMsg(err?.message || t.auth.signInGenericError);
-          },
-        });
-        setLoading(false);
-        return;
-      }
-
-      const fbUser = await signInWithGooglePopup();
-      const synced = await syncSignedInUserProfile(fbUser, { requestedPlan });
-      onAuthenticated(synced);
-    } catch (err: any) {
-      const code = String(err?.code || '');
-      const msgStr = String(err?.message || '');
-      if (code === 'auth/popup-closed-by-user') {
-        setErrorMsg(t.auth.popupClosedError);
-      } else if (code === 'auth/popup-blocked') {
-        setErrorMsg(t.auth.popupBlockedError);
-      } else if (code === 'auth/unauthorized-domain' || /unauthorized-domain/i.test(msgStr)) {
-        setErrorMsg(
-          isAr
-            ? 'تعذر إتمام الدخول عبر Google حالياً. يرجى المحاولة مجدداً أو الدخول بالبريد الإلكتروني.'
-            : 'Google Sign-In is temporarily unavailable. Please try again or sign in with Email.'
-        );
-      } else {
-        setErrorMsg(err?.message || t.auth.signInGenericError);
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleEmailAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!termsAgreed) {
@@ -225,8 +159,8 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
       if (code === 'auth/operation-not-allowed') {
         setErrorMsg(
           isAr
-            ? 'تسجيل الدخول بالبريد الإلكتروني غير متاح حالياً. استخدم الدخول عبر Google.'
-            : 'Email sign-in is currently unavailable. Please continue with Google.'
+            ? 'يرجى تفعيل طريقة الدخول بالبريد الإلكتروني في إعدادات المشروع.'
+            : 'Email/Password sign-in needs to be enabled in authentication settings.'
         );
       } else if (code === 'auth/unauthorized-domain' || /unauthorized-domain/i.test(msgStr)) {
         setErrorMsg(t.auth.signInGenericError);
@@ -244,8 +178,8 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
       ) {
         setErrorMsg(
           isAr
-            ? 'البريد الإلكتروني أو كلمة المرور غير صحيحة. إذا كنت دخلت عبر Google مسبقاً، اضغط "نسيت / تعيين كلمة مرور" لإعداد كلمة مرور.'
-            : 'Incorrect email or password. If you previously signed in with Google, use "Forgot Password" to set one.'
+            ? 'البريد الإلكتروني أو كلمة المرور غير صحيحة. يمكنك الضغط على "نسيت / تعيين كلمة مرور" لإعداد كلمة مرور جديدة.'
+            : 'Incorrect email or password. Use "Forgot Password" to reset or set a password.'
         );
       } else {
         setErrorMsg(err?.message || t.auth.signInGenericError);
@@ -458,8 +392,8 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
 
                 <p className="text-xs sm:text-sm text-sky-100/95 leading-relaxed">
                   {isAr
-                    ? 'سجّل الدخول أو أنشئ حساباً جديداً عبر Google أو البريد الإلكتروني. تحصل على تجربتين مجانيتين، ثم يمكنك الاشتراك الشهري (€5) أو السنوي (€50) عبر واتساب.'
-                    : 'Sign in or create an account with Google or Email. You receive 2 free trials, then unlock unlimited services via Monthly (€5) or Annual (€50) subscription.'}
+                    ? 'سجّل الدخول أو أنشئ حساباً جديداً عبر البريد الإلكتروني. تحصل على تجربتين مجانيتين، ثم يمكنك الاشتراك الشهري (€5) أو السنوي (€50) عبر واتساب.'
+                    : 'Sign in or create an account with your Email. You receive 2 free trials, then unlock unlimited services via Monthly (€5) or Annual (€50) subscription.'}
                 </p>
               </div>
 
@@ -549,55 +483,9 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
                   <div className="space-y-1">
                     <h2 className="font-editorial text-xl sm:text-2xl font-bold text-[#082F5E] dark:text-white">
                       {isAr
-                        ? 'تسجيل الدخول أو إنشاء حساب'
-                        : 'Sign In or Create Account'}
+                        ? 'تسجيل الدخول بالبريد الإلكتروني'
+                        : 'Sign In with Email'}
                     </h2>
-                  </div>
-
-                  {/* Primary Hero Google Sign-In / Sign-Up Button */}
-                  <button
-                    type="button"
-                    disabled={loading}
-                    onClick={handleGoogleAuth}
-                    className="w-full py-3.5 px-5 rounded-xl bg-[#0D5EAF] hover:bg-[#0A4A8B] disabled:opacity-60 text-white text-sm font-bold flex items-center justify-center gap-3 shadow-md shadow-[#0D5EAF]/20 transition-all cursor-pointer"
-                  >
-                    <span className="w-6 h-6 rounded-full bg-white flex items-center justify-center shrink-0">
-                      <svg className="w-4 h-4" viewBox="0 0 24 24" aria-hidden="true">
-                        <path
-                          fill="#4285F4"
-                          d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
-                        />
-                        <path
-                          fill="#34A853"
-                          d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24z"
-                        />
-                        <path
-                          fill="#FBBC05"
-                          d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14z"
-                        />
-                        <path
-                          fill="#EA4335"
-                          d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96z"
-                        />
-                      </svg>
-                    </span>
-                    <span>
-                      {loading
-                        ? isAr
-                          ? 'جاري الاتصال بحساب Google...'
-                          : 'Connecting to Google...'
-                        : isAr
-                        ? 'تسجيل الدخول أو إنشاء حساب عبر Google'
-                        : 'Continue with Google (Sign In / Sign Up)'}
-                    </span>
-                  </button>
-
-                  <div className="relative flex items-center justify-center">
-                    <div className="border-t border-slate-200 dark:border-[#163256] w-full" />
-                    <span className="px-3 bg-white dark:bg-[#0B1D36] text-[11px] font-semibold text-slate-400 whitespace-nowrap">
-                      {isAr ? 'أو باستخدام البريد الإلكتروني وكلمة المرور' : 'or use Email & Password'}
-                    </span>
-                    <div className="border-t border-slate-200 dark:border-[#163256] w-full" />
                   </div>
 
                   {/* Mode Switcher: Sign In vs Create New Account */}
@@ -751,7 +639,7 @@ export const AuthGateScreen: React.FC<AuthGateScreenProps> = ({
                     <button
                       type="submit"
                       disabled={loading}
-                      className="w-full py-3 px-5 rounded-xl border border-[#0D5EAF] bg-white dark:bg-[#061325] hover:bg-sky-50 dark:hover:bg-[#082F5E] disabled:opacity-60 text-[#0D5EAF] dark:text-sky-300 text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                      className="w-full py-3.5 px-5 rounded-xl bg-[#0D5EAF] hover:bg-[#0A4A8B] disabled:opacity-60 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 shadow-md shadow-[#0D5EAF]/20 transition-colors cursor-pointer"
                     >
                       {loading && <Loader2 className="w-4 h-4 animate-spin" />}
                       <span>

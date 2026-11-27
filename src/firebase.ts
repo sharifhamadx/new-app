@@ -1,9 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
-  GoogleAuthProvider,
-  signInWithPopup,
-  signInWithCredential,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   sendEmailVerification,
@@ -33,8 +30,6 @@ const app = initializeApp(firebaseConfig);
 export const FIREBASE_PROJECT_ID = firebaseConfig.projectId;
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
-export const googleProvider = new GoogleAuthProvider();
-googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 export const ADMIN_EMAILS = [
   'sharifhamadx122@gmail.com',
@@ -218,20 +213,6 @@ export async function getFreshFirebaseIdToken(forceRefresh = false): Promise<str
   } catch {
     return null;
   }
-}
-
-export async function signInWithGooglePopup(): Promise<FirebaseUser> {
-  const cred = await signInWithPopup(auth, googleProvider);
-  return cred.user;
-}
-
-export async function signInWithGoogleMobileTokens(
-  idToken?: string | null,
-  accessToken?: string | null
-): Promise<FirebaseUser> {
-  const credential = GoogleAuthProvider.credential(idToken || undefined, accessToken || undefined);
-  const result = await signInWithCredential(auth, credential);
-  return result.user;
 }
 
 export async function registerWithEmail(params: {

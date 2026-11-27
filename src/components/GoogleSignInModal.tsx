@@ -1,16 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Capacitor } from '@capacitor/core';
 import { Language, SubscriptionPlan, User } from '../types';
 import { useUiTranslation } from '../hooks/useTranslatedContent';
-import { apiUrl, getActiveApiBaseUrl } from '../utils/apiBase';
-import { launchNativeMobileGoogleAuth } from '../utils/mobileAuthBridge';
+import { apiUrl } from '../utils/apiBase';
 import {
   registerWithEmail,
   reloadCurrentFirebaseUser,
   resendVerificationEmail,
   resetPasswordEmail,
   signInWithEmail,
-  signInWithGooglePopup,
   syncSignedInUserProfile,
 } from '../firebase';
 import {
@@ -106,67 +103,6 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
     setPendingApprovalUser(syncedUser);
   };
 
-  const handleGoogleSignIn = async () => {
-    if (!termsAgreed) {
-      setErrorMsg(t.auth.agreementRequiredNotice);
-      return;
-    }
-
-    setLoading(true);
-    setErrorMsg(null);
-    setSuccessMsg(null);
-
-    try {
-      let isNative = false;
-      try {
-        isNative = Capacitor.isNativePlatform();
-      } catch {
-        isNative = false;
-      }
-
-      if (isNative) {
-        const base = getActiveApiBaseUrl();
-        if (!base) {
-          throw new Error(t.auth.signInGenericError);
-        }
-        await launchNativeMobileGoogleAuth({
-          baseUrl: base,
-          lang: currentLang,
-          onAuthenticated: (syncedUser) => {
-            finalizeSignedInUser(syncedUser);
-          },
-          onError: (err: any) => {
-            setErrorMsg(err?.message || t.auth.signInGenericError);
-          },
-        });
-        setLoading(false);
-        return;
-      }
-
-      const fbUser = await signInWithGooglePopup();
-      const synced = await syncSignedInUserProfile(fbUser, { requestedPlan });
-      finalizeSignedInUser(synced);
-    } catch (err: any) {
-      const code = String(err?.code || '');
-      const msgStr = String(err?.message || '');
-      if (code === 'auth/popup-closed-by-user') {
-        setErrorMsg(t.auth.popupClosedError);
-      } else if (code === 'auth/popup-blocked') {
-        setErrorMsg(t.auth.popupBlockedError);
-      } else if (code === 'auth/unauthorized-domain' || /unauthorized-domain/i.test(msgStr)) {
-        setErrorMsg(
-          isAr
-            ? 'تعذر إتمام الدخول عبر Google حالياً. يرجى المحاولة مجدداً أو الدخول بالبريد الإلكتروني.'
-            : 'Google Sign-In is temporarily unavailable. Please try again or sign in with Email.'
-        );
-      } else {
-        setErrorMsg(err?.message || t.auth.signInGenericError);
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleEmailAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!termsAgreed) {
@@ -208,8 +144,8 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
       if (code === 'auth/operation-not-allowed') {
         setErrorMsg(
           isAr
-            ? 'تسجيل الدخول بالبريد الإلكتروني غير متاح حالياً. استخدم الدخول عبر Google.'
-            : 'Email sign-in is currently unavailable. Please continue with Google.'
+            ? 'يرجى تفعيل طريقة الدخول بالبريد الإلكتروني في إعدادات المشروع.'
+            : 'Email/Password sign-in needs to be enabled in authentication settings.'
         );
       } else if (code === 'auth/unauthorized-domain' || /unauthorized-domain/i.test(msgStr)) {
         setErrorMsg(t.auth.signInGenericError);
@@ -227,8 +163,8 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
       ) {
         setErrorMsg(
           isAr
-            ? 'البريد الإلكتروني أو كلمة المرور غير صحيحة. إذا كنت دخلت سابقاً بـ Google، اضغط "نسيت / تعيين كلمة مرور" لإعداد كلمة مرور.'
-            : 'Incorrect email or password. If you previously used Google Sign-In, click "Forgot Password".'
+            ? 'البريد الإلكتروني أو كلمة المرور غير صحيحة. يمكنك الضغط على "نسيت / تعيين كلمة مرور" لإعداد كلمة مرور جديدة.'
+            : 'Incorrect email or password. Click "Forgot Password" to reset or set a password.'
         );
       } else {
         setErrorMsg(err?.message || t.auth.signInGenericError);
@@ -421,42 +357,36 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
             </div>
           ) : (
             <div className="space-y-4">
-              {/* Google 1-Click Sign-In */}
-              <button
-                type="button"
-                disabled={loading}
-                onClick={handleGoogleSignIn}
-                className="w-full py-3 px-4 rounded-xl bg-[#0D5EAF] hover:bg-[#0A4A8B] text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2.5 transition-colors cursor-pointer"
-              >
-                <span className="w-5 h-5 rounded-full bg-white flex items-center justify-center shrink-0">
-                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" aria-hidden="true">
-                    <path
-                      fill="#4285F4"
-                      d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
-                    />
-                    <path
-                      fill="#34A853"
-                      d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24z"
-                    />
-                    <path
-                      fill="#FBBC05"
-                      d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14z"
-                    />
-                    <path
-                      fill="#EA4335"
-                      d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96z"
-                    />
-                  </svg>
-                </span>
-                <span>{t.auth.continueWithGoogle}</span>
-              </button>
-
-              <div className="relative flex items-center justify-center">
-                <div className="border-t border-slate-200 dark:border-[#163256] w-full" />
-                <span className="px-3 bg-white dark:bg-[#0B1D36] text-[11px] font-semibold text-slate-400 whitespace-nowrap">
-                  {isAr ? 'أو بالبريد الإلكتروني وكلمة المرور' : 'or with Email & Password'}
-                </span>
-                <div className="border-t border-slate-200 dark:border-[#163256] w-full" />
+              {/* Mode Switcher: Sign In vs Create New Account */}
+              <div className="grid grid-cols-2 gap-1.5 p-1 rounded-xl bg-slate-100 dark:bg-[#061325] border border-slate-200 dark:border-[#163256]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('signin');
+                    setErrorMsg(null);
+                  }}
+                  className={`py-2 px-3 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                    authMode === 'signin'
+                      ? 'bg-white dark:bg-[#0B1D36] text-[#082F5E] dark:text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400'
+                  }`}
+                >
+                  {isAr ? 'تسجيل الدخول' : 'Sign In'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('register');
+                    setErrorMsg(null);
+                  }}
+                  className={`py-2 px-3 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                    authMode === 'register'
+                      ? 'bg-white dark:bg-[#0B1D36] text-[#082F5E] dark:text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400'
+                  }`}
+                >
+                  {isAr ? 'إنشاء حساب جديد' : 'Create New Account'}
+                </button>
               </div>
 
               {/* Email Sign-In / Sign-Up Form */}
@@ -575,7 +505,7 @@ export const GoogleSignInModal: React.FC<GoogleSignInModalProps> = ({
                 <button
                   type="submit"
                   disabled={loading}
-                  className="w-full py-3 px-5 rounded-xl border border-[#0D5EAF] bg-white dark:bg-[#061325] hover:bg-sky-50 dark:hover:bg-[#082F5E] disabled:opacity-60 text-[#0D5EAF] dark:text-sky-300 text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                  className="w-full py-3 px-5 rounded-xl bg-[#0D5EAF] hover:bg-[#0A4A8B] disabled:opacity-60 text-white text-xs sm:text-sm font-bold flex items-center justify-center gap-2 transition-colors cursor-pointer"
                 >
                   {loading && <Loader2 className="w-4 h-4 animate-spin" />}
                   <span>
